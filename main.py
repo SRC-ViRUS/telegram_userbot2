@@ -1,18 +1,34 @@
 # -*- coding: utf-8 -*-
-import asyncio, random
+import asyncio, random, json, os
 from telethon import TelegramClient, events, Button
 from telethon.sessions import StringSession
-from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError
+from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError, UserAlreadyParticipantError
+from telethon.tl.functions.channels import JoinChannelRequest, GetFullChannelRequest
+from telethon.tl.functions.messages import GetFullChatRequest
+from telethon.tl.types import Channel, Chat
 
 api_id    = 20507759
 api_hash  = "225d3a24d84c637b3b816d13cc7bd766"
 bot_token = "7644214767:AAGOlYEiyF6yFWxiIX_jlwo9Ssj_Cb95oLU"
+
+sessions_file = "sessions.json"
 
 sessions, clients = {}, {}
 add_state, send_state, save_state = {}, {}, {}
 stored_insults = {"👦": set(), "👧": set()}
 
 bot = TelegramClient("bot", api_id, api_hash)
+
+# --- دوال لحفظ واسترجاع الجلسات من ملف JSON ---
+def save_sessions():
+    with open(sessions_file, "w", encoding="utf-8") as f:
+        json.dump(sessions, f, ensure_ascii=False, indent=2)
+
+def load_sessions():
+    global sessions
+    if os.path.exists(sessions_file):
+        with open(sessions_file, "r", encoding="utf-8") as f:
+            sessions = json.load(f)
 
 def menu():
     return [
@@ -25,7 +41,8 @@ def menu():
 def sess_btns(pref): return [[Button.inline(n, f"{pref}:{n}".encode())] for n in sessions]
 
 @bot.on(events.NewMessage(pattern=r"^/start$"))
-async def start(e): await e.respond("🟢 مرحباً، اختر من الأزرار:", buttons=menu())
+async def start(e): 
+    await e.respond("🟢 مرحباً، اختر من الأزرار:", buttons=menu())
 
 @bot.on(events.CallbackQuery(data=b"list"))
 async def _(e):
@@ -37,7 +54,8 @@ async def _(e):
 
 @bot.on(events.CallbackQuery(data=b"del"))
 async def _(e):
-    if not sessions: return await e.answer("🚫 لا يوجد جلسات لحذفها.", alert=True)
+    if not sessions: 
+        return await e.answer("🚫 لا يوجد جلسات لحذفها.", alert=True)
     await e.edit("🗑️ اختر جلسة لحذفها:", buttons=sess_btns("rm"))
 
 @bot.on(events.CallbackQuery(pattern=b"rm:(.+)"))
@@ -47,6 +65,7 @@ async def _(e):
         sessions.pop(n)
         if (c := clients.pop(n, None)):
             await c.disconnect()
+        save_sessions()  # حفظ التعديل
         await e.edit(f"❌ حُذفت الجلسة `{n}`", parse_mode="md", buttons=menu())
     else:
         await e.answer("❌ الجلسة غير موجودة.", alert=True)
@@ -101,6 +120,7 @@ async def _(e):
 async def _(m):
     uid, txt = m.sender_id, m.raw_text.strip()
 
+    # إضافة جلسة
     if uid in add_state:
         st = add_state[uid]
         if st["step"] == 1:
@@ -133,6 +153,7 @@ async def _(m):
                 return await m.reply("❌ الكود غير صحيح.")
             sessions[st["phone"]] = st["client"].session.save()
             clients[st["phone"]] = st["client"]
+            save_sessions()  # حفظ التعديل
             add_state.pop(uid)
             return await m.reply("✅ تمت الإضافة بنجاح.", buttons=menu())
         if st["step"] == 5:
@@ -140,12 +161,14 @@ async def _(m):
                 await st["client"].sign_in(password=txt)
                 sessions[st["phone"]] = st["client"].session.save()
                 clients[st["phone"]] = st["client"]
+                save_sessions()  # حفظ التعديل
                 add_state.pop(uid)
                 return await m.reply("✅ تمت الإضافة بنجاح.", buttons=menu())
             except Exception as e:
                 add_state.pop(uid)
                 return await m.reply(f"❌ خطأ: {e}")
 
+    # إرسال رسالة
     if uid in send_state:
         st = send_state[uid]
         if st["step"] == 1:
@@ -156,16 +179,60 @@ async def _(m):
             target = txt
             send_state.pop(uid)
             await m.reply("🚀 يتم الآن الإرسال...")
+
+            # تحقق من نوع الهدف (شخصي أو مجموعة)
+            try:
+                entity = await bot.get_entity(target)
+            except Exception as e:
+                return await m.reply(f"❌ خطأ في العثور على الهدف: {e}")
+
+            is_group = isinstance(entity, (Channel, Chat))
             ok, bad = 0, 0
-            for n, cl in clients.items():
-                try:
-                    await cl.send_message(await cl.get_entity(target), st["msg"])
-                    ok += 1
-                except Exception as e:
-                    bad += 1
-                    print(f"[{n}] خطأ: {e}")
+
+            if is_group:
+                # اذا مجموعة، حاول انضمام الحسابات غير المنضمة
+                for n, cl in clients.items():
+                    try:
+                        # تحقق إذا العضو بالفعل موجود
+                        full = await cl(GetFullChannelRequest(entity)) if isinstance(entity, Channel) else await cl(GetFullChatRequest(entity))
+                        participants = []
+                        if isinstance(entity, Channel):
+                            participants = [p.user_id for p in full.full_chat.participants or []]
+                        else:
+                            participants = [p.user_id for p in full.full_chat.participants or []]
+                        if cl.get_me().id not in participants:
+                            try:
+                                await cl(JoinChannelRequest(entity))
+                                await asyncio.sleep(3)  # انتظار قليل بعد الانضمام
+                            except UserAlreadyParticipantError:
+                                pass
+                            except Exception as ex:
+                                print(f"[{n}] خطأ أثناء الانضمام: {ex}")
+                    except Exception as e:
+                        print(f"[{n}] خطأ أثناء جلب المشاركين: {e}")
+
+                # إرسال الرسائل مع تأخير 5 ثواني بين كل حساب
+                for n, cl in clients.items():
+                    try:
+                        await cl.send_message(entity, st["msg"])
+                        ok += 1
+                    except Exception as e:
+                        bad += 1
+                        print(f"[{n}] خطأ أثناء الإرسال: {e}")
+                    await asyncio.sleep(5)
+            else:
+                # اذا شخصي، ارسل للجميع دفعة واحدة بدون تأخير
+                for n, cl in clients.items():
+                    try:
+                        await cl.send_message(entity, st["msg"])
+                        ok += 1
+                    except Exception as e:
+                        bad += 1
+                        print(f"[{n}] خطأ أثناء الإرسال: {e}")
+
             return await m.reply(f"✅ أُرسلت الرسائل.\nنجاح: {ok} | فشل: {bad}", buttons=menu())
 
+    # حفظ الشتيمة
     if uid in save_state:
         st = save_state[uid]
         if st["step"] == 1 and txt.lower() != "الغاء":
@@ -207,9 +274,15 @@ async def _(e):
     await e.edit(f"{txt}\nالفئة: 👧", buttons=menu())
 
 async def main():
+    load_sessions()  # تحميل الجلسات المحفوظة
+    # إنشاء عملاء لكل جلسة وتحميلها
+    for phone, sess in sessions.items():
+        client = TelegramClient(StringSession(sess), api_id, api_hash)
+        await client.start()
+        clients[phone] = client
+
     await bot.start(bot_token=bot_token)
     print("✅ Bot is online")
     await bot.run_until_disconnected()
 
-if __name__ == "__main__":
-    asyncio.run(main())
+if __name__
