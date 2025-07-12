@@ -11,9 +11,6 @@ api_id    = 20507759
 api_hash  = "225d3a24d84c637b3b816d13cc7bd766"
 bot_token = "7644214767:AAGOlYEiyF6yFWxiIX_jlwo9Ssj_Cb95oLU"
 
-sessions_file = "sessions.json"
-
-sessions, clients = {}, {}
 add_state, send_state, save_state = {}, {}, {}
 stored_insults = {"👦": set(), "👧": set()}
 
