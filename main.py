@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
-import asyncio, json, os, random, re
+import asyncio, json, os, random
 from telethon import TelegramClient, events, Button
 from telethon.sessions import StringSession
 from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError
-from telethon.tl.types import PeerChannel
 
 # ─── بيانات البوت ─────────────────────────────────────────────
 api_id    = 20507759
@@ -13,20 +12,15 @@ SESS_FILE = "sessions.json"
 
 # ─── حاويات عامّة ────────────────────────────────────────────
 sessions, clients = {}, {}
-add_state, send_state = {}, {}
-tagall_state = {}
+add_state, send_state, save_state, attack_state = {}, {}, {}, {}
+
+stored_insults = {
+    "ولد": {"انطم", "انت نوب", "يا غبي", "ما تسوى", "تف عليك"},
+    "بنت": {"انقلعي", "يا رخيصة", "تافهة", "منحطة", "كافي مسخرة"}
+}
 
 # ─── بوت ─────────────────────────────────────────────────────
 bot = TelegramClient("bot", api_id, api_hash)
-
-# ─── قائمة جمل التاكات العشوائية ─────────────────────────────
-tag_messages = [
-    "هاي يا شباب، لازم تشوفون هالشي!",
-    "سلام عليكم، هاي رسالة مهمة!",
-    "يلا يا حلوين، لا تنسون الموضوع!",
-    "هذي الرسالة للكل، انتبهوا!",
-    "تذكير سريع لكم جميعاً!"
-]
 
 # ─── وظائف مساندة ────────────────────────────────────────────
 def load_sessions():
@@ -49,7 +43,8 @@ def menu():
     return [
         [Button.inline("📋 الجلسات", b"list"), Button.inline("📥 إضافة جلسة", b"add")],
         [Button.inline("🗑️ حذف جلسة", b"del"), Button.inline("✉️ إرسال رسالة", b"snd")],
-        [Button.inline("📢 تاك جماعي", b"tagall"), Button.inline("⏸️ وقف التاك", b"stop_tag")]
+        [Button.inline("📢 تاك جماعي", b"tagall"), Button.inline("⏸️ وقف التاك", b"stop_tag")],
+        [Button.inline("🔥 هجوم", b"attack")]
     ]
 
 def sess_btns(pref): return [[Button.inline(n, f"{pref}:{n}".encode())] for n in sessions]
@@ -140,55 +135,32 @@ async def all_handler(m):
                     await cl.send_message(await cl.get_entity(target), st["msg"])
                     ok+=1
                 except Exception as e:
-                    bad+=1
+                    bad+=1; print(e)
             return await m.reply(f"انتهى. ناجحة:{ok} | فاشلة:{bad}", buttons=menu())
 
-    # -------- حالة تاك جماعي (تحديد يوزر المنشن) --------
-    if uid in tagall_state:
-        st = tagall_state[uid]
-        if st["step"] == 1:
-            st["user_to_tag"] = txt
-            st["step"] = 2
-            await m.reply("أرسل رابط المجموعة (رابط الكروب):")
-            return
-        elif st["step"] == 2:
-            st["group_link"] = txt
-            st["running"] = True
-            st["step"] = 3
+    # -------- هجوم (إرسال شتائم) --------
+    if uid in attack_state and attack_state[uid]["step"] == 2:
+        target = txt
+        kind = attack_state[uid]["type"]
+        attack_state.pop(uid)
+        ok, bad = 0, 0
 
-            # تحويل رابط المجموعة إلى Entity
+        for cl_name, cl in clients.items():
             try:
-                entity = await bot.get_entity(await get_entity_from_link(st["group_link"]))
+                insults = random.sample(stored_insults[kind], min(5, len(stored_insults[kind])))
+                for insult in insults:
+                    await cl.send_message(target, insult)
+                await asyncio.sleep(30)
+                insults = random.sample(stored_insults[kind], min(5, len(stored_insults[kind])))
+                for insult in insults:
+                    await cl.send_message(target, insult)
+                await cl.delete_dialog(target)
+                ok += 1
             except Exception as e:
-                tagall_state.pop(uid)
-                await m.reply(f"❌ خطأ في الحصول على المجموعة:\n{e}", buttons=menu())
-                return
+                bad += 1
+                print(f"هجوم فشل لجلسة {cl_name}: {e}")
 
-            ok, bad = 0, 0
-            for name, client in clients.items():
-                if not st["running"]:
-                    break
-                try:
-                    msg = random.choice(tag_messages)
-                    text_to_send = f"{st['user_to_tag']}\n{msg}"
-                    await client.send_message(entity, text_to_send)
-                    ok += 1
-                    await asyncio.sleep(2)
-                except Exception:
-                    bad += 1
-
-            tagall_state.pop(uid)
-            await m.reply(f"تم إرسال التاكات بواسطة {ok} جلسات.\nفشلت: {bad}", buttons=menu())
-            return
-
-# ─── دالة لتحويل رابط المجموعة إلى Entity ─────────────────────
-async def get_entity_from_link(link):
-    clean_link = re.sub(r'https?://t\.me/', '', link)
-    if clean_link.startswith('c/'):
-        channel_id = int(clean_link.split('/')[1])
-        return PeerChannel(channel_id - 1000000000000)
-    else:
-        return clean_link
+        await m.reply(f"🔥 تم الهجوم على {target}\n✅ ناجح: {ok} | ❌ فشل: {bad}", buttons=menu())
 
 # ─── زر إرسال رسالة (بدء) ───────────────────────────────────
 @bot.on(events.CallbackQuery(data=b"snd"))
@@ -196,23 +168,21 @@ async def _(e):
     send_state[e.sender_id]={"step":1}
     await e.edit("اكتب النص الذي تريد إرساله لكل الجلسات:")
 
-# ─── زر التاك الجماعي (بدء) ─────────────────────────────────
-@bot.on(events.CallbackQuery(data=b"tagall"))
-async def _(e):
-    uid = e.sender_id
-    tagall_state[uid] = {"step": 1, "running": False}
-    await e.edit("أرسل @username أو ID الشخص الذي تريد أن يتم ذكره:")
+# ─── زر هجوم ────────────────────────────────────────────────
+@bot.on(events.CallbackQuery(data=b"attack"))
+async def attack_start(event):
+    attack_state[event.sender_id] = {"step": 1}
+    buttons = [
+        [Button.inline("👦 ولد", b"attack_type:ولد"), Button.inline("👧 بنت", b"attack_type:بنت")]
+    ]
+    await event.edit("🔥 اختر نوع الهجوم (الشتائم):", buttons=buttons)
 
-# ─── زر وقف التاك الجماعي ────────────────────────────────────
-@bot.on(events.CallbackQuery(data=b"stop_tag"))
-async def _(e):
-    uid = e.sender_id
-    if uid in tagall_state and tagall_state[uid].get("running", False):
-        tagall_state[uid]["running"] = False
-        await e.answer("تم إيقاف التاك الجماعي.", alert=True)
-        await e.edit("⏸️ تم إيقاف التاك الجماعي.", buttons=menu())
-    else:
-        await e.answer("لا توجد عملية تاك جماعي شغالة حالياً.", alert=True)
+@bot.on(events.CallbackQuery(pattern=b"attack_type:(.+)"))
+async def attack_choose_type(event):
+    kind = event.data.decode().split(":")[1]
+    attack_state[event.sender_id]["type"] = kind
+    attack_state[event.sender_id]["step"] = 2
+    await event.edit(f"🔥 اختر @username أو ID المستهدف:")
 
 # ─── تشغيل البوت ────────────────────────────────────────────
 async def main():
