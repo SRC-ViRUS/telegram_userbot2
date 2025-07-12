@@ -12,8 +12,9 @@ SESS_FILE = "sessions.json"
 
 # ─── حاويات عامّة ────────────────────────────────────────────
 sessions, clients = {}, {}
-add_state, send_state, save_state, spam_tasks = {}, {}, {}, {}
+add_state, send_state, save_state = {}, {}, {}
 stored_insults = {"ولد": set(), "بنت": set()}
+send_insult_state = {}  # حالة إرسال الشتائم (الخطوات)
 
 # ─── بوت ─────────────────────────────────────────────────────
 bot = TelegramClient("bot", api_id, api_hash)
@@ -41,7 +42,8 @@ def menu():
         [Button.inline("📋 الجلسات", b"list"), Button.inline("📥 إضافة جلسة", b"add")],
         [Button.inline("🗑️ حذف جلسة", b"del"), Button.inline("✉️ إرسال رسالة", b"snd")],
         [Button.inline("😈 انجب شتيمة", b"insult")],
-        [Button.inline("🔥 قائمة الشتائم", b"insults_menu")]
+        [Button.inline("🔥 قائمة الشتائم", b"insults_menu")],
+        [Button.inline("📤 ارسال شتائم", b"start_send_insults")]
     ]
 
 def sess_btns(pref): return [[Button.inline(n, f"{pref}:{n}".encode())] for n in sessions]
@@ -148,6 +150,56 @@ async def all_handler(m):
         btns=[[Button.inline("👦 ولد","svb".encode()),Button.inline("👧 بنت","svg".encode())]]
         await m.reply("اختر الفئة:", buttons=btns)
 
+    # -------- إرسال الشتائم الدفعات (خطوات) --------
+    if uid in send_insult_state:
+        state = send_insult_state[uid]
+
+        # الخطوة 1: استلام يوزر أو ID
+        if state["step"] == 1:
+            state["target"] = txt
+            state["step"] = 2
+            await m.reply("اختر فئة الشتائم:\n1. ولد\n2. بنت\nأرسل رقم 1 أو 2")
+            return
+
+        # الخطوة 2: استلام الفئة وإرسال الدفعتين
+        if state["step"] == 2:
+            kind_map = {"1": "ولد", "2": "بنت"}
+            if txt not in kind_map:
+                await m.reply("خطأ! أرسل 1 لفئة الولد أو 2 لفئة البنت")
+                return
+            kind = kind_map[txt]
+
+            insults_list = list(stored_insults.get(kind, []))
+            if not insults_list:
+                await m.reply(f"ماكو شتائم محفوظة لفئة {kind}.")
+                send_insult_state.pop(uid)
+                return
+
+            batches = [insults_list[i:i+5] for i in range(0, min(len(insults_list), 10), 5)]
+
+            try:
+                target_entity = await bot.get_entity(state["target"])
+            except Exception as e:
+                await m.reply(f"خطأ في إيجاد المستخدم: {e}")
+                send_insult_state.pop(uid)
+                return
+
+            await m.reply(f"سيتم إرسال 2 دفعات من الشتائم إلى {state['target']}، كل دفعة 5 شتائم، بفاصل 30 ثانية بينهما.")
+
+            for batch in batches:
+                msg_text = "شتائم عشوائية:\n" + "\n".join(batch)
+                try:
+                    msg = await bot.send_message(target_entity, msg_text)
+                    await asyncio.sleep(5)
+                    await msg.delete()
+                except Exception as e:
+                    await m.reply(f"خطأ عند إرسال الشتائم: {e}")
+                    break
+                await asyncio.sleep(30)
+
+            await m.reply("انتهى إرسال الشتائم.")
+            send_insult_state.pop(uid)
+
 # ─── زر إرسال رسالة (بدء) ───────────────────────────────────
 @bot.on(events.CallbackQuery(data=b"snd"))
 async def _(e):
@@ -170,7 +222,8 @@ async def _(e):
     if insult in stored_insults[kind]:
         txt="⚠️ موجودة سابقًا."
     else:
-        stored_insults[kind].add(insult); txt="✅ حُفظت."
+        stored_insults[kind].add(insult)
+        txt="✅ حُفظت."
     save_state.pop(uid, None)
     await e.edit(f"{txt}\nالفئة: {kind}", buttons=menu())
 
