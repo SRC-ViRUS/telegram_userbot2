@@ -1,237 +1,196 @@
-import asyncio, json, os, re
+# -*- coding: utf-8 -*-
+import asyncio, json, os
 from telethon import TelegramClient, events, Button
 from telethon.sessions import StringSession
-from telethon.errors import (
-    SessionPasswordNeededError, PhoneCodeInvalidError,
-    UserAlreadyParticipantError
-)
+from telethon.errors import (SessionPasswordNeededError,
+                             PhoneCodeInvalidError,
+                             UserAlreadyParticipantError)
 from telethon.tl.functions.channels import JoinChannelRequest, LeaveChannelRequest
 from telethon.tl.functions.messages import ImportChatInviteRequest
 
-#──────────── بيانات البوت ────────────
+# ── بيانات البوت ───────────────────────────────────────────────
 api_id    = 20507759
 api_hash  = "225d3a24d84c637b3b816d13cc7bd766"
 bot_token = "7644214767:AAGOlYEiyF6yFWxiIX_jlwo9Ssj_Cb95oLU"
 SESS_FILE = "sessions.json"
 
-#──────────── متغيّرات عامّة ────────────
-sessions, clients = {}, {}
-current_chat      = None
-waiting_for_link  = set()          # user_ids بانتظار رابط
-adding_state      = {}             # حالة إضافة جلسة
-send_message_state = {}            # user_id: {"step": 1/2, "text": ""}
+# ── متغيّرات عامّة ───────────────────────────────────────────
+sessions, clients               = {}, {}
+current_chat_link               = None     # آخر رابط صعدنا عليه
+waiting_for_link                = set()    # user_ids بانتظار الرابط
+adding_state, send_message_state = {}, {}  # حالات حوار التفاعل
 
 bot = TelegramClient("bot", api_id, api_hash)
 
-#──────────── أدوات جلسات ────────────
+# ── إدارة الجلسات ملفًا وتشغيلًا ──────────────────────────────
 def load_sessions():
     global sessions
-    if os.path.exists(SESS_FILE):
-        with open(SESS_FILE, "r", encoding="utf-8") as f:
-            sessions = json.load(f)
-    else:
-        sessions = {}
+    sessions = json.load(open(SESS_FILE)) if os.path.exists(SESS_FILE) else {}
 
 def save_sessions():
-    with open(SESS_FILE, "w", encoding="utf-8") as f:
-        json.dump(sessions, f, ensure_ascii=False, indent=2)
+    json.dump(sessions, open(SESS_FILE, "w"), ensure_ascii=False, indent=2)
 
 async def start_all_sessions():
     for name, s in sessions.items():
         try:
             c = TelegramClient(StringSession(s), api_id, api_hash)
-            await c.start()
-            clients[name] = c
-            print(f"[+] Session started: {name}")
+            await c.start(); clients[name] = c
+            print(f"[+] جلسة {name}")
         except Exception as e:
-            print(f"[!] {name} failed: {e}")
+            print(f"[!] فشل {name}: {e}")
 
-#──────────── أزرار الواجهة ────────────
+# ── أزرار الواجهة ─────────────────────────────────────────────
 def menu():
     return [
         [Button.inline("🚀 صعود الاتصال", b"connect"),
          Button.inline("🛑 نزول الاتصال", b"disconnect")],
-        [Button.inline("📋 عرض الجلسات", b"list"),
+        [Button.inline("📋 الجلسات", b"list"),
          Button.inline("📥 إضافة جلسة", b"add")],
         [Button.inline("🗑️ حذف جلسة", b"del"),
          Button.inline("✉️ إرسال رسالة", b"sendmsg")]
     ]
 
-def sessions_btns(prefix):          # أزرار بأسماء الجلسات
+def sessions_btns(prefix):
     return [[Button.inline(n, f"{prefix}:{n}".encode())] for n in sessions]
 
-#──────────── /start ────────────
+# ── /start ───────────────────────────────────────────────────
 @bot.on(events.NewMessage(pattern="/start"))
-async def cmd_start(e):
-    await e.respond("👋 أهلاً بك، اختر من الأزرار:", buttons=menu())
+async def start_cmd(e): await e.respond("🟢 اختر:", buttons=menu())
 
-#──────────── عرض الجلسات ────────────
+# ── عرض الجلسات ───────────────────────────────────────────────
 @bot.on(events.CallbackQuery(data=b"list"))
 async def list_sess(e):
-    txt = "📋 **الجلسات الحالية:**\n"
-    txt += "لا توجد جلسات." if not sessions else "\n".join(f"- `{s}`" for s in sessions)
-    await e.edit(txt, buttons=menu(), parse_mode="md")
+    txt = "📋 الجلسات:\n" + ("\n".join(f"- `{n}`" for n in sessions) if sessions else "لا توجد.")
+    await e.edit(txt, parse_mode="md", buttons=menu())
 
-#──────────── حذف جلسة ────────────
+# ── حذف جلسة ─────────────────────────────────────────────────
 @bot.on(events.CallbackQuery(data=b"del"))
-async def del_choose(e):
-    if not sessions:
-        await e.answer("🚫 لا توجد جلسات.")
-        return
-    await e.edit("🗑️ اختر جلسة للحذف:", buttons=sessions_btns("del"))
+async def del_pick(e):
+    if not sessions: return await e.answer("🚫 لا جلسات.")
+    await e.edit("🗑️ اختر جلسة:", buttons=sessions_btns("del"))
 
 @bot.on(events.CallbackQuery(pattern=b"del:(.+)"))
 async def del_done(e):
     name = e.data.decode().split(":",1)[1]
     sessions.pop(name, None); save_sessions()
-    c = clients.pop(name, None)
-    if c: await c.disconnect()
-    await e.edit(f"🗑️ حُذفت الجلسة `{name}`.", buttons=menu(), parse_mode="md")
+    cl = clients.pop(name, None); await cl.disconnect() if cl else None
+    await e.edit(f"🗑️ حذف `{name}`", parse_mode="md", buttons=menu())
 
-#──────────── إضافة جلسة ────────────
+# ── إضافة جلسة (حوار تفاعلي) ─────────────────────────────────
 @bot.on(events.CallbackQuery(data=b"add"))
-async def add_begin(e):
-    adding_state[e.sender_id] = {"step":1}
-    await e.edit("📥 *إضافة جلسة*\nأرسل `api_id`:", parse_mode="md")
+async def add_step1(e):
+    adding_state[e.sender_id] = {"step":1}; await e.edit("api_id ؟")
 
 @bot.on(events.NewMessage)
-async def add_flow_or_link(msg):
+async def handle_all(msg):
     uid, txt = msg.sender_id, msg.raw_text.strip()
 
-    #── إضافة جلسة
+    # إضافة جلسة
     if uid in adding_state:
         st, step = adding_state[uid], adding_state[uid]["step"]
         if step == 1:
-            if not txt.isdigit():
-                await msg.reply("❌ api_id يجب رقم.")
-                return
-            st["api_id"] = int(txt); st["step"] = 2
-            await msg.reply("🔑 أرسل `api_hash`:")
-        elif step == 2:
-            st["api_hash"] = txt; st["step"] = 3
-            await msg.reply("📞 أرسل رقم الهاتف (+):")
-        elif step == 3:
+            if not txt.isdigit(): return await msg.reply("رقم فقط.")
+            st["api_id"] = int(txt); st["step"]=2; return await msg.reply("api_hash ؟")
+        if step == 2:
+            st["api_hash"] = txt; st["step"]=3; return await msg.reply("رقم الهاتف (+) ؟")
+        if step == 3:
             st["phone"] = txt
-            st["client"] = TelegramClient(StringSession(), st["api_id"], st["api_hash"])
+            st["client"]= TelegramClient(StringSession(), st["api_id"], st["api_hash"])
             await st["client"].connect()
             try:
-                await st["client"].send_code_request(st["phone"])
-                st["step"] = 4
-                await msg.reply("✉️ أرسل كود التفعيل:")
+                await st["client"].send_code_request(txt)
+                st["step"]=4; return await msg.reply("الكود؟")
             except Exception as e:
-                adding_state.pop(uid)
-                await msg.reply(f"❌ خطأ إرسال الكود: {e}")
-        elif step == 4:
-            cl = st["client"]
+                adding_state.pop(uid); return await msg.reply(f"خطأ: {e}")
+        if step == 4:
+            cl=st["client"]
             try:
-                await cl.sign_in(st["phone"], txt.replace(" ", ""))
-                sess = cl.session.save(); name = st["phone"]
-                sessions[name] = sess; save_sessions(); clients[name] = cl
-                adding_state.pop(uid)
-                await msg.reply(f"✅ أُضيفت الجلسة `{name}`", buttons=menu(), parse_mode="md")
+                await cl.sign_in(st["phone"], txt.replace(" ",""))
             except SessionPasswordNeededError:
-                st["step"] = 5
-                await msg.reply("🔐 أرسل كلمة مرور 2FA:")
+                st["step"]=5; return await msg.reply("كلمة مرور 2FA؟")
             except PhoneCodeInvalidError:
-                await msg.reply("❌ الكود خاطئ، حاول ثانية.")
-            except Exception as e:
-                adding_state.pop(uid)
-                await msg.reply(f"❌ فشل: {e}")
-        elif step == 5:
-            cl = st["client"]
+                return await msg.reply("كود غلط.")
+            sessions[st["phone"]] = cl.session.save(); save_sessions(); clients[st["phone"]] = cl
+            adding_state.pop(uid); return await msg.reply("✅ تمت الإضافة", buttons=menu())
+        if step == 5:
             try:
-                await cl.sign_in(password=txt)
-                sess = cl.session.save(); name = st["phone"]
-                sessions[name] = sess; save_sessions(); clients[name] = cl
-                adding_state.pop(uid)
-                await msg.reply(f"✅ أُضيفت الجلسة `{name}`", buttons=menu(), parse_mode="md")
+                stc=st["client"]; await stc.sign_in(password=txt)
+                sessions[st["phone"]] = stc.session.save(); save_sessions(); clients[st["phone"]] = stc
+                adding_state.pop(uid); return await msg.reply("✅ تمت الإضافة", buttons=menu())
             except Exception as e:
-                adding_state.pop(uid)
-                await msg.reply(f"❌ كلمة المرور خاطئة: {e}")
-        return
+                adding_state.pop(uid); return await msg.reply(f"خطأ: {e}")
 
-    #── إرسال رسالة لكل الجلسات
+    # إرسال رسالة
     if uid in send_message_state:
-        state = send_message_state[uid]
-        if state["step"] == 1:
-            state["text"] = txt
-            state["step"] = 2
-            await msg.reply("🎯 إلى من تريد إرسال الرسالة؟ (يوزر / آيدي / رابط كروب)")
-        elif state["step"] == 2:
-            target = txt
-            text = state["text"]
-            del send_message_state[uid]
+        state=send_message_state[uid]
+        if state["step"]==1:
+            state["text"]=txt; state["step"]=2
+            return await msg.reply("🎯 الهدف (يوزر @ أو آيدي أو رابط)؟")
+        target=txt; text=state["text"]; send_message_state.pop(uid)
+        await msg.reply("🚀 إرسال...")
+        for n,cl in clients.items():
+            try:
+                ent=await cl.get_entity(target); await cl.send_message(ent,text)
+                await bot.send_message(msg.chat_id,f"✅ {n}")
+            except Exception as ex:
+                await bot.send_message(msg.chat_id,f"❌ {n}: {ex}")
+        return await bot.send_message(msg.chat_id,"انتهى ✅",buttons=menu())
 
-            await msg.reply("🚀 جارٍ إرسال الرسالة من جميع الحسابات...")
-            for name, cl in clients.items():
-                try:
-                    ent = await cl.get_entity(target)
-                    await cl.send_message(ent, text)
-                    await bot.send_message(msg.chat_id, f"✅ [{name}] أرسل الرسالة")
-                    await asyncio.sleep(1)
-                except Exception as ex:
-                    await bot.send_message(msg.chat_id, f"❌ [{name}] فشل الإرسال: {ex}")
-            await bot.send_message(msg.chat_id, "✅ تمت عملية الإرسال.", buttons=menu())
-            return
-
-    #── رابط الصعود
+    # رابط الصعود
     if uid in waiting_for_link:
-        waiting_for_link.discard(uid)
-        await handle_link(msg, txt)
+        waiting_for_link.discard(uid); await ascend_accounts(msg, txt)
 
-#──────────── صعود الاتصال ────────────
+# ── زر إرسال رسالة ───────────────────────────────────────────
+@bot.on(events.CallbackQuery(data=b"sendmsg"))
+async def sendmsg_btn(e):
+    send_message_state[e.sender_id]={"step":1}
+    await e.edit("📝 اكتب الرسالة لإرسالها:")
+
+# ── صعود/نزول ────────────────────────────────────────────────
 @bot.on(events.CallbackQuery(data=b"connect"))
 async def connect_btn(e):
     waiting_for_link.add(e.sender_id)
-    await e.edit("📨 أرسل رابط القناة / الكروب / المكالمة:")
+    await e.edit("📨 أرسل الرابط (قناة/كروب/دعوة/مكالمة):")
 
-#──────────── نزول الاتصال ────────────
 @bot.on(events.CallbackQuery(data=b"disconnect"))
 async def disconnect_btn(e):
-    if not current_chat:
-        await e.edit("⚠️ لا يوجد كروب محدّد.", buttons=menu())
-        return
-    await e.edit("🔁 نزول الحسابات...")
+    if not current_chat_link: return await e.edit("لا كروب محدد.",buttons=menu())
+    await e.edit("نزول...")
     for n, cl in clients.items():
         try:
-            await cl(LeaveChannelRequest(current_chat))
-            await asyncio.sleep(1)
-            await bot.send_message(e.chat_id, f"⬇️ [{n}] خرج")
+            ent=await cl.get_entity(current_chat_link.split("?")[0])
+            await cl(LeaveChannelRequest(ent)); await asyncio.sleep(1)
+            await bot.send_message(e.chat_id,f"⬇️ {n}")
         except Exception as er:
-            await bot.send_message(e.chat_id, f"❌ [{n}] خطأ: {er}")
-    await bot.send_message(e.chat_id, "✅ تم النزول.", buttons=menu())
+            await bot.send_message(e.chat_id,f"❌ {n}: {er}")
+    await bot.send_message(e.chat_id,"تم ✅",buttons=menu())
 
-#──────────── صعود – معالجة الرابط لكل حساب ────────────
-async def handle_link(event, link):
-    await event.reply("🔁 جارٍ صعود الحسابات...")
-
-    for name, cl in clients.items():
+# ── تنفيذ الصعود لكل الجلسات ─────────────────────────────────
+async def ascend_accounts(event, link):
+    await event.reply("صعود...")
+    base = link.split("?")[0]
+    for n, cl in clients.items():
         try:
             if "joinchat" in link or "t.me/+" in link:
-                code = link.split("+")[-1]
-                await cl(ImportChatInviteRequest(code))
+                code=link.split("+")[-1]; await cl(ImportChatInviteRequest(code))
             else:
-                base = link.split("?")[0]  # يزيل ?videochat
-                ent  = await cl.get_entity(base)
-                await cl(JoinChannelRequest(ent))
-
+                ent=await cl.get_entity(base); await cl(JoinChannelRequest(ent))
+            await bot.send_message(event.chat_id,f"✅ {n}")
             await asyncio.sleep(1)
-            await bot.send_message(event.chat_id, f"✅ [{name}] صعد")
         except UserAlreadyParticipantError:
-            await bot.send_message(event.chat_id, f"✅ [{name}] موجود")
+            await bot.send_message(event.chat_id,f"🟢 {n} موجود")
         except Exception as ex:
-            await bot.send_message(event.chat_id, f"❌ [{name}] خطأ: {ex}")
+            await bot.send_message(event.chat_id,f"❌ {n}: {ex}")
+    global current_chat_link
+    current_chat_link = link
+    await bot.send_message(event.chat_id,"⬆️ اكتمل الصعود.",buttons=menu())
 
-    global current_chat
-    current_chat = base if "base" in locals() else link
-    await bot.send_message(event.chat_id, "✅ اكتملت العملية.", buttons=menu())
-
-#──────────── التشغيل ────────────
+# ── تشغيل البوت ──────────────────────────────────────────────
 async def main():
     load_sessions()
     await bot.start(bot_token=bot_token)
     await start_all_sessions()
-    print(">> Bot running ...")
+    print("Bot online ✓")
     await bot.run_until_disconnected()
 
 if __name__ == "__main__":
