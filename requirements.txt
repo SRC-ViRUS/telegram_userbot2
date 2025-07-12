@@ -1,3 +1,2 @@
 telethon==1.40.0
 yt-dlp
-git+https://github.com/pytgcalls/pytgcalls.git@7f34d1e5d705174f891462b9a4d4a4d89d4a2e44
