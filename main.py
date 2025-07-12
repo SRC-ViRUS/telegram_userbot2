@@ -14,7 +14,7 @@ SESS_FILE = "sessions.json"
 sessions, clients = {}, {}
 add_state, send_state, save_state = {}, {}, {}
 stored_insults = {"ولد": set(), "بنت": set()}
-send_insult_state = {}  # حالة إرسال الشتائم (الخطوات)
+send_insult_state = {}  # حالة إرسال الشتائم (حوار من خطوتين)
 
 # ─── بوت ─────────────────────────────────────────────────────
 bot = TelegramClient("bot", api_id, api_hash)
@@ -43,7 +43,7 @@ def menu():
         [Button.inline("🗑️ حذف جلسة", b"del"), Button.inline("✉️ إرسال رسالة", b"snd")],
         [Button.inline("😈 انجب شتيمة", b"insult")],
         [Button.inline("🔥 قائمة الشتائم", b"insults_menu")],
-        [Button.inline("📤 ارسال شتائم", b"start_send_insults")]
+        [Button.inline("📤 ارسال شتائم", b"start_send_insults")]  # زر الإرسال
     ]
 
 def sess_btns(pref): return [[Button.inline(n, f"{pref}:{n}".encode())] for n in sessions]
@@ -127,7 +127,7 @@ async def all_handler(m):
             except Exception as e:
                 add_state.pop(uid); return await m.reply(f"خطأ: {e}")
 
-    # -------- إرسال رسالة --------
+    # -------- إرسال رسالة جماعية --------
     if uid in send_state:
         st = send_state[uid]
         if st["step"]==1:
@@ -150,11 +150,11 @@ async def all_handler(m):
         btns=[[Button.inline("👦 ولد","svb".encode()),Button.inline("👧 بنت","svg".encode())]]
         await m.reply("اختر الفئة:", buttons=btns)
 
-    # -------- إرسال الشتائم الدفعات (خطوات) --------
+    # -------- إرسال الشتائم الدفعات (حوار من خطوتين) --------
     if uid in send_insult_state:
         state = send_insult_state[uid]
 
-        # الخطوة 1: استلام يوزر أو ID
+        # الخطوة 1: استلام معرف الهدف
         if state["step"] == 1:
             state["target"] = txt
             state["step"] = 2
@@ -184,18 +184,18 @@ async def all_handler(m):
                 send_insult_state.pop(uid)
                 return
 
-            await m.reply(f"سيتم إرسال 2 دفعات من الشتائم إلى {state['target']}، كل دفعة 5 شتائم، بفاصل 30 ثانية بينهما.")
+            await m.reply(f"سيتم إرسال دفعتين من الشتائم إلى {state['target']} (5 شتائم في كل دفعة، بفاصل 30 ثانية).")
 
             for batch in batches:
                 msg_text = "شتائم عشوائية:\n" + "\n".join(batch)
                 try:
                     msg = await bot.send_message(target_entity, msg_text)
-                    await asyncio.sleep(5)
-                    await msg.delete()
+                    await asyncio.sleep(5)      # انتظر 5 ثواني
+                    await msg.delete()          # حذف رسالة البوت
                 except Exception as e:
                     await m.reply(f"خطأ عند إرسال الشتائم: {e}")
                     break
-                await asyncio.sleep(30)
+                await asyncio.sleep(30)         # فاصل 30 ثانية
 
             await m.reply("انتهى إرسال الشتائم.")
             send_insult_state.pop(uid)
@@ -268,6 +268,12 @@ async def send_random(e):
 @bot.on(events.CallbackQuery(pattern=b"back_menu"))
 async def back_to_menu(e):
     await e.edit("🟢 أهلاً، اختر:", buttons=menu())
+
+# ⭐ ── تفعيل زر 📤 ارسال شتائم ───────────────────────────────
+@bot.on(events.CallbackQuery(data=b"start_send_insults"))
+async def _(e):
+    send_insult_state[e.sender_id] = {"step": 1}
+    await e.edit("📨 أرسل معرف الشخص (يوزر أو ID) اللي تريد ترسل له الشتائم:")
 
 # ─── تشغيل البوت ────────────────────────────────────────────
 async def main():
