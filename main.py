@@ -40,7 +40,8 @@ def menu():
     return [
         [Button.inline("📋 الجلسات", b"list"), Button.inline("📥 إضافة جلسة", b"add")],
         [Button.inline("🗑️ حذف جلسة", b"del"), Button.inline("✉️ إرسال رسالة", b"snd")],
-        [Button.inline("😈 انجب شتيمة", b"insult")]
+        [Button.inline("😈 انجب شتيمة", b"insult")],
+        [Button.inline("🔥 قائمة الشتائم", b"insults_menu")]
     ]
 
 def sess_btns(pref): return [[Button.inline(n, f"{pref}:{n}".encode())] for n in sessions]
@@ -178,6 +179,42 @@ async def _(e):
 async def _(m):
     if save_state.pop(m.sender_id, None):
         return await m.reply("أُلغي الطلب.", buttons=menu())
+
+# ─── قائمة الشتائم الرئيسية ──────────────────────────────────
+@bot.on(events.CallbackQuery(data=b"insults_menu"))
+async def insults_menu(e):
+    await e.edit(
+        "اختر من القائمة:",
+        buttons=[
+            [Button.inline("عرض شتائم الأولاد", b"show_insults_boys")],
+            [Button.inline("عرض شتائم البنات", b"show_insults_girls")],
+            [Button.inline("إرسال شتيمة عشوائية", b"send_random_insult")],
+            [Button.inline("رجوع", b"back_menu")]
+        ]
+    )
+
+@bot.on(events.CallbackQuery(pattern=b"show_insults_boys"))
+async def show_boys(e):
+    insults = "\n".join(stored_insults["ولد"]) or "لا توجد شتائم."
+    await e.edit(f"شتائم الأولاد:\n{insults}", buttons=[Button.inline("رجوع", b"insults_menu")])
+
+@bot.on(events.CallbackQuery(pattern=b"show_insults_girls"))
+async def show_girls(e):
+    insults = "\n".join(stored_insults["بنت"]) or "لا توجد شتائم."
+    await e.edit(f"شتائم البنات:\n{insults}", buttons=[Button.inline("رجوع", b"insults_menu")])
+
+@bot.on(events.CallbackQuery(pattern=b"send_random_insult"))
+async def send_random(e):
+    all_insults = list(stored_insults["ولد"]) + list(stored_insults["بنت"])
+    if not all_insults:
+        await e.answer("ماكو شتائم محفوظة.", alert=True)
+        return
+    insult = random.choice(all_insults)
+    await e.edit(f"شتيمة عشوائية:\n{insult}", buttons=[Button.inline("رجوع", b"insults_menu")])
+
+@bot.on(events.CallbackQuery(pattern=b"back_menu"))
+async def back_to_menu(e):
+    await e.edit("🟢 أهلاً، اختر:", buttons=menu())
 
 # ─── تشغيل البوت ────────────────────────────────────────────
 async def main():
