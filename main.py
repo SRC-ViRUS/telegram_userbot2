@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
-import asyncio, json, os, random
+import asyncio, json, os, random, re
 from telethon import TelegramClient, events, Button
 from telethon.sessions import StringSession
 from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError
+from telethon.tl.types import PeerChannel
 
 # ─── بيانات البوت ─────────────────────────────────────────────
 api_id    = 20507759
@@ -12,12 +13,20 @@ SESS_FILE = "sessions.json"
 
 # ─── حاويات عامّة ────────────────────────────────────────────
 sessions, clients = {}, {}
-add_state, send_state, save_state = {}, {}, {}
-stored_insults = {"ولد": set(), "بنت": set()}
-send_insult_state = {}  # حالة إرسال الشتائم (حوار من خطوتين)
+add_state, send_state = {}, {}
+tagall_state = {}
 
 # ─── بوت ─────────────────────────────────────────────────────
 bot = TelegramClient("bot", api_id, api_hash)
+
+# ─── قائمة جمل التاكات العشوائية ─────────────────────────────
+tag_messages = [
+    "هاي يا شباب، لازم تشوفون هالشي!",
+    "سلام عليكم، هاي رسالة مهمة!",
+    "يلا يا حلوين، لا تنسون الموضوع!",
+    "هذي الرسالة للكل، انتبهوا!",
+    "تذكير سريع لكم جميعاً!"
+]
 
 # ─── وظائف مساندة ────────────────────────────────────────────
 def load_sessions():
@@ -31,8 +40,7 @@ async def spin_all_sessions():
     for usr, s in sessions.items():
         try:
             c = TelegramClient(StringSession(s), api_id, api_hash)
-            await c.start()
-            clients[usr] = c
+            await c.start(); clients[usr] = c
             print(f"[+] {usr} ON")
         except Exception as e:
             print(f"[!] {usr} FAIL: {e}")
@@ -41,9 +49,7 @@ def menu():
     return [
         [Button.inline("📋 الجلسات", b"list"), Button.inline("📥 إضافة جلسة", b"add")],
         [Button.inline("🗑️ حذف جلسة", b"del"), Button.inline("✉️ إرسال رسالة", b"snd")],
-        [Button.inline("😈 انجب شتيمة", b"insult")],
-        [Button.inline("🔥 قائمة الشتائم", b"insults_menu")],
-        [Button.inline("📤 ارسال شتائم", b"start_send_insults")]  # زر الإرسال
+        [Button.inline("📢 تاك جماعي", b"tagall"), Button.inline("⏸️ وقف التاك", b"stop_tag")]
     ]
 
 def sess_btns(pref): return [[Button.inline(n, f"{pref}:{n}".encode())] for n in sessions]
@@ -57,8 +63,7 @@ async def _(e): await e.respond("🟢 أهلاً، اختر:", buttons=menu())
 async def _(e):
     if sessions:
         txt = "📂 الجلسات:\n" + "\n".join(f"- `{u}`" for u in sessions)
-    else:
-        txt = "🚫 لا توجد جلسات."
+    else: txt = "🚫 لا توجد جلسات."
     await e.edit(txt, parse_mode="md", buttons=menu())
 
 # ─── حذف جلسة ────────────────────────────────────────────────
@@ -71,13 +76,10 @@ async def _(e):
 async def _(e):
     n = e.data.decode().split(":",1)[1]
     if n in sessions:
-        sessions.pop(n)
-        save_sessions()
-        if (c:=clients.pop(n,None)):
-            await c.disconnect()
+        sessions.pop(n); save_sessions()
+        if (c:=clients.pop(n,None)): await c.disconnect()
         await e.edit(f"حُذفت `{n}`", parse_mode="md", buttons=menu())
-    else:
-        await e.answer("❌ غير موجودة.", alert=True)
+    else: await e.answer("❌ غير موجودة.", alert=True)
 
 # ─── إضافة جلسة (حوار) ───────────────────────────────────────
 @bot.on(events.CallbackQuery(data=b"add"))
@@ -98,8 +100,7 @@ async def all_handler(m):
         if st["step"]==2:
             st["api_hash"]=txt; st["step"]=3; return await m.reply("أرسل رقم الهاتف مع +:")
         if st["step"]==3:
-            st["phone"]=txt
-            st["client"]=TelegramClient(StringSession(), st["api_id"], st["api_hash"])
+            st["phone"]=txt; st["client"]=TelegramClient(StringSession(),st["api_id"],st["api_hash"])
             await st["client"].connect()
             try:
                 await st["client"].send_code_request(txt)
@@ -113,21 +114,19 @@ async def all_handler(m):
                 st["step"]=5; return await m.reply("كلمة مرور 2FA:")
             except PhoneCodeInvalidError:
                 return await m.reply("كود خطأ.")
-            sessions[st["phone"]] = st["client"].session.save()
-            save_sessions()
+            sessions[st["phone"]] = st["client"].session.save(); save_sessions()
             clients[st["phone"]]  = st["client"]
             add_state.pop(uid); return await m.reply("تمت الإضافة ✅", buttons=menu())
         if st["step"]==5:
             try:
                 await st["client"].sign_in(password=txt)
-                sessions[st["phone"]] = st["client"].session.save()
-                save_sessions()
+                sessions[st["phone"]] = st["client"].session.save(); save_sessions()
                 clients[st["phone"]]  = st["client"]
                 add_state.pop(uid); return await m.reply("تمت الإضافة ✅", buttons=menu())
             except Exception as e:
                 add_state.pop(uid); return await m.reply(f"خطأ: {e}")
 
-    # -------- إرسال رسالة جماعية --------
+    # -------- إرسال رسالة --------
     if uid in send_state:
         st = send_state[uid]
         if st["step"]==1:
@@ -141,64 +140,55 @@ async def all_handler(m):
                     await cl.send_message(await cl.get_entity(target), st["msg"])
                     ok+=1
                 except Exception as e:
-                    bad+=1; print(e)
+                    bad+=1
             return await m.reply(f"انتهى. ناجحة:{ok} | فاشلة:{bad}", buttons=menu())
 
-    # -------- حفظ شتيمة مؤقت --------
-    if uid in save_state and save_state[uid]["step"]==1 and txt.lower()!="الغاء":
-        save_state[uid]["text"]=txt
-        btns=[[Button.inline("👦 ولد","svb".encode()),Button.inline("👧 بنت","svg".encode())]]
-        await m.reply("اختر الفئة:", buttons=btns)
+    # -------- حالة تاك جماعي (تحديد يوزر المنشن) --------
+    if uid in tagall_state:
+        st = tagall_state[uid]
+        if st["step"] == 1:
+            st["user_to_tag"] = txt
+            st["step"] = 2
+            await m.reply("أرسل رابط المجموعة (رابط الكروب):")
+            return
+        elif st["step"] == 2:
+            st["group_link"] = txt
+            st["running"] = True
+            st["step"] = 3
 
-    # -------- إرسال الشتائم الدفعات (حوار من خطوتين) --------
-    if uid in send_insult_state:
-        state = send_insult_state[uid]
+            # تحويل رابط المجموعة إلى Entity
+            try:
+                entity = await bot.get_entity(await get_entity_from_link(st["group_link"]))
+            except Exception as e:
+                tagall_state.pop(uid)
+                await m.reply(f"❌ خطأ في الحصول على المجموعة:\n{e}", buttons=menu())
+                return
 
-        # الخطوة 1: استلام معرف الهدف
-        if state["step"] == 1:
-            state["target"] = txt
-            state["step"] = 2
-            await m.reply("اختر فئة الشتائم:\n1. ولد\n2. بنت\nأرسل رقم 1 أو 2")
+            ok, bad = 0, 0
+            for name, client in clients.items():
+                if not st["running"]:
+                    break
+                try:
+                    msg = random.choice(tag_messages)
+                    text_to_send = f"{st['user_to_tag']}\n{msg}"
+                    await client.send_message(entity, text_to_send)
+                    ok += 1
+                    await asyncio.sleep(2)
+                except Exception:
+                    bad += 1
+
+            tagall_state.pop(uid)
+            await m.reply(f"تم إرسال التاكات بواسطة {ok} جلسات.\nفشلت: {bad}", buttons=menu())
             return
 
-        # الخطوة 2: استلام الفئة وإرسال الدفعتين
-        if state["step"] == 2:
-            kind_map = {"1": "ولد", "2": "بنت"}
-            if txt not in kind_map:
-                await m.reply("خطأ! أرسل 1 لفئة الولد أو 2 لفئة البنت")
-                return
-            kind = kind_map[txt]
-
-            insults_list = list(stored_insults.get(kind, []))
-            if not insults_list:
-                await m.reply(f"ماكو شتائم محفوظة لفئة {kind}.")
-                send_insult_state.pop(uid)
-                return
-
-            batches = [insults_list[i:i+5] for i in range(0, min(len(insults_list), 10), 5)]
-
-            try:
-                target_entity = await bot.get_entity(state["target"])
-            except Exception as e:
-                await m.reply(f"خطأ في إيجاد المستخدم: {e}")
-                send_insult_state.pop(uid)
-                return
-
-            await m.reply(f"سيتم إرسال دفعتين من الشتائم إلى {state['target']} (5 شتائم في كل دفعة، بفاصل 30 ثانية).")
-
-            for batch in batches:
-                msg_text = "شتائم عشوائية:\n" + "\n".join(batch)
-                try:
-                    msg = await bot.send_message(target_entity, msg_text)
-                    await asyncio.sleep(5)      # انتظر 5 ثواني
-                    await msg.delete()          # حذف رسالة البوت
-                except Exception as e:
-                    await m.reply(f"خطأ عند إرسال الشتائم: {e}")
-                    break
-                await asyncio.sleep(30)         # فاصل 30 ثانية
-
-            await m.reply("انتهى إرسال الشتائم.")
-            send_insult_state.pop(uid)
+# ─── دالة لتحويل رابط المجموعة إلى Entity ─────────────────────
+async def get_entity_from_link(link):
+    clean_link = re.sub(r'https?://t\.me/', '', link)
+    if clean_link.startswith('c/'):
+        channel_id = int(clean_link.split('/')[1])
+        return PeerChannel(channel_id - 1000000000000)
+    else:
+        return clean_link
 
 # ─── زر إرسال رسالة (بدء) ───────────────────────────────────
 @bot.on(events.CallbackQuery(data=b"snd"))
@@ -206,74 +196,23 @@ async def _(e):
     send_state[e.sender_id]={"step":1}
     await e.edit("اكتب النص الذي تريد إرساله لكل الجلسات:")
 
-# ─── حفظ شتيمة (تبدأ برسالة زر) ────────────────────────────
-@bot.on(events.CallbackQuery(data=b"insult"))
+# ─── زر التاك الجماعي (بدء) ─────────────────────────────────
+@bot.on(events.CallbackQuery(data=b"tagall"))
 async def _(e):
-    save_state[e.sender_id]={"step":1}
-    await e.edit("أرسل الشتيمة (أي نص)، أو كلمة 'الغاء' لإلغاء:")
+    uid = e.sender_id
+    tagall_state[uid] = {"step": 1, "running": False}
+    await e.edit("أرسل @username أو ID الشخص الذي تريد أن يتم ذكره:")
 
-@bot.on(events.CallbackQuery(pattern=b"svb|svg"))
+# ─── زر وقف التاك الجماعي ────────────────────────────────────
+@bot.on(events.CallbackQuery(data=b"stop_tag"))
 async def _(e):
-    uid   = e.sender_id
-    kind  = "ولد" if e.data==b"svb" else "بنت"
-    if uid not in save_state:
-        return await e.answer("لا يوجد شيء للحفظ.", alert=True)
-    insult = save_state[uid]["text"]
-    if insult in stored_insults[kind]:
-        txt="⚠️ موجودة سابقًا."
+    uid = e.sender_id
+    if uid in tagall_state and tagall_state[uid].get("running", False):
+        tagall_state[uid]["running"] = False
+        await e.answer("تم إيقاف التاك الجماعي.", alert=True)
+        await e.edit("⏸️ تم إيقاف التاك الجماعي.", buttons=menu())
     else:
-        stored_insults[kind].add(insult)
-        txt="✅ حُفظت."
-    save_state.pop(uid, None)
-    await e.edit(f"{txt}\nالفئة: {kind}", buttons=menu())
-
-# ─── زر إلغاء (على حفظ الشتيمة) ────────────────────────────
-@bot.on(events.NewMessage(pattern=r"(?i)^الغاء$"))
-async def _(m):
-    if save_state.pop(m.sender_id, None):
-        return await m.reply("أُلغي الطلب.", buttons=menu())
-
-# ─── قائمة الشتائم الرئيسية ──────────────────────────────────
-@bot.on(events.CallbackQuery(data=b"insults_menu"))
-async def insults_menu(e):
-    await e.edit(
-        "اختر من القائمة:",
-        buttons=[
-            [Button.inline("عرض شتائم الأولاد", b"show_insults_boys")],
-            [Button.inline("عرض شتائم البنات", b"show_insults_girls")],
-            [Button.inline("إرسال شتيمة عشوائية", b"send_random_insult")],
-            [Button.inline("رجوع", b"back_menu")]
-        ]
-    )
-
-@bot.on(events.CallbackQuery(pattern=b"show_insults_boys"))
-async def show_boys(e):
-    insults = "\n".join(stored_insults["ولد"]) or "لا توجد شتائم."
-    await e.edit(f"شتائم الأولاد:\n{insults}", buttons=[Button.inline("رجوع", b"insults_menu")])
-
-@bot.on(events.CallbackQuery(pattern=b"show_insults_girls"))
-async def show_girls(e):
-    insults = "\n".join(stored_insults["بنت"]) or "لا توجد شتائم."
-    await e.edit(f"شتائم البنات:\n{insults}", buttons=[Button.inline("رجوع", b"insults_menu")])
-
-@bot.on(events.CallbackQuery(pattern=b"send_random_insult"))
-async def send_random(e):
-    all_insults = list(stored_insults["ولد"]) + list(stored_insults["بنت"])
-    if not all_insults:
-        await e.answer("ماكو شتائم محفوظة.", alert=True)
-        return
-    insult = random.choice(all_insults)
-    await e.edit(f"شتيمة عشوائية:\n{insult}", buttons=[Button.inline("رجوع", b"insults_menu")])
-
-@bot.on(events.CallbackQuery(pattern=b"back_menu"))
-async def back_to_menu(e):
-    await e.edit("🟢 أهلاً، اختر:", buttons=menu())
-
-# ⭐ ── تفعيل زر 📤 ارسال شتائم ───────────────────────────────
-@bot.on(events.CallbackQuery(data=b"start_send_insults"))
-async def _(e):
-    send_insult_state[e.sender_id] = {"step": 1}
-    await e.edit("📨 أرسل معرف الشخص (يوزر أو ID) اللي تريد ترسل له الشتائم:")
+        await e.answer("لا توجد عملية تاك جماعي شغالة حالياً.", alert=True)
 
 # ─── تشغيل البوت ────────────────────────────────────────────
 async def main():
