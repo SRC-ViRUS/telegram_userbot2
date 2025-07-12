@@ -1,1 +1,2 @@
-telethon
+telethon==1.40.0
+pytgcalls==0.8.1
