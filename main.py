@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-import asyncio, json, os, random
+import asyncio, random
 from telethon import TelegramClient, events, Button
 from telethon.sessions import StringSession
 from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError
@@ -8,7 +8,6 @@ from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError
 api_id    = 20507759
 api_hash  = "225d3a24d84c637b3b816d13cc7bd766"
 bot_token = "7644214767:AAGOlYEiyF6yFWxiIX_jlwo9Ssj_Cb95oLU"
-SESS_FILE = "sessions.json"
 
 # ─── حاويات عامّة ────────────────────────────────────────────
 sessions, clients = {}, {}
@@ -19,13 +18,6 @@ stored_insults = {"ولد": set(), "بنت": set()}
 bot = TelegramClient("bot", api_id, api_hash)
 
 # ─── وظائف مساندة ────────────────────────────────────────────
-def load_sessions():
-    if os.path.exists(SESS_FILE):
-        sessions.update(json.load(open(SESS_FILE)))
-
-def save_sessions():
-    json.dump(sessions, open(SESS_FILE, "w"), ensure_ascii=False, indent=2)
-
 async def spin_all_sessions():
     for usr, s in sessions.items():
         try:
@@ -44,15 +36,17 @@ def menu():
         [Button.inline("📚 عرض شتائم بنت", b"show_insults_girl"), Button.inline("🔥 هجوم", b"attack")]
     ]
 
-def sess_btns(pref): return [[Button.inline(n, f"{pref}:{n}".encode())] for n in sessions]
+def sess_btns(pref): 
+    return [[Button.inline(n, f"{pref}:{n}".encode())] for n in sessions]
 
 # ─── /start ──────────────────────────────────────────────────
 @bot.on(events.NewMessage(pattern=r"^/start$"))
-async def _(e): await e.respond("🟢 أهلاً، اختر:", buttons=menu())
+async def start_handler(e):
+    await e.respond("🟢 أهلاً، اختر:", buttons=menu())
 
 # ─── عرض الجلسات ─────────────────────────────────────────────
 @bot.on(events.CallbackQuery(data=b"list"))
-async def _(e):
+async def list_sessions(e):
     if sessions:
         txt = "📂 الجلسات:\n" + "\n".join(f"- `{u}`" for u in sessions)
     else:
@@ -61,23 +55,25 @@ async def _(e):
 
 # ─── حذف جلسة ────────────────────────────────────────────────
 @bot.on(events.CallbackQuery(data=b"del"))
-async def _(e):
-    if not sessions: return await e.answer("🚫 لا جلسات.", alert=True)
+async def delete_session_menu(e):
+    if not sessions:
+        return await e.answer("🚫 لا جلسات.", alert=True)
     await e.edit("🗑️ اختر:", buttons=sess_btns("rm"))
 
 @bot.on(events.CallbackQuery(pattern=b"rm:(.+)"))
-async def _(e):
+async def delete_session(e):
     n = e.data.decode().split(":",1)[1]
     if n in sessions:
-        sessions.pop(n); save_sessions()
-        if (c:=clients.pop(n,None)): await c.disconnect()
+        sessions.pop(n)
+        if (c:=clients.pop(n,None)):
+            await c.disconnect()
         await e.edit(f"حُذفت `{n}`", parse_mode="md", buttons=menu())
     else:
         await e.answer("❌ غير موجودة.", alert=True)
 
 # ─── إضافة جلسة (حوار) ───────────────────────────────────────
 @bot.on(events.CallbackQuery(data=b"add"))
-async def _(e):
+async def add_session_start(e):
     add_state[e.sender_id] = {"step":1}
     await e.edit("أرسل api_id:")
 
@@ -118,7 +114,6 @@ async def all_handler(m):
             except PhoneCodeInvalidError:
                 return await m.reply("كود خطأ.")
             sessions[st["phone"]] = st["client"].session.save()
-            save_sessions()
             clients[st["phone"]] = st["client"]
             add_state.pop(uid)
             return await m.reply("تمت الإضافة ✅", buttons=menu())
@@ -126,7 +121,6 @@ async def all_handler(m):
             try:
                 await st["client"].sign_in(password=txt)
                 sessions[st["phone"]] = st["client"].session.save()
-                save_sessions()
                 clients[st["phone"]] = st["client"]
                 add_state.pop(uid)
                 return await m.reply("تمت الإضافة ✅", buttons=menu())
@@ -183,7 +177,10 @@ async def all_handler(m):
                 insults = random.sample(stored_insults[kind], min(5, len(stored_insults[kind])))
                 for insult in insults:
                     await cl.send_message(target, insult)
-                await cl.delete_dialog(target)
+                try:
+                    await cl.delete_dialog(target)
+                except:
+                    pass
                 ok += 1
             except Exception as e:
                 bad += 1
@@ -211,8 +208,42 @@ async def all_handler(m):
 
 # ─── زر إرسال رسالة (بدء) ───────────────────────────────────
 @bot.on(events.CallbackQuery(data=b"snd"))
-async def _(e):
+async def start_send_message(e):
     send_state[e.sender_id] = {"step": 1}
     await e.edit("اكتب النص الذي تريد إرساله لكل الجلسات:")
 
-# ─── زر إضافة شتيمة ─────────────────────────────────
+# ─── زر إضافة شتيمة ──────────────────────────────────────────
+@bot.on(events.CallbackQuery(data=b"add_insult"))
+async def start_add_insult(e):
+    save_state[e.sender_id] = {"step": 1}
+    await e.edit("أرسل الشتيمة (أي نص)، أو كلمة 'الغاء' لإلغاء:")
+
+# ─── حفظ الشتيمة ولد أو بنت ───────────────────────────────────
+@bot.on(events.CallbackQuery(pattern=b"save_boy|save_girl"))
+async def save_insult_handler(e):
+    uid = e.sender_id
+    if uid not in save_state:
+        return await e.answer("لا يوجد شيء للحفظ.", alert=True)
+    kind = "ولد" if e.data == b"save_boy" else "بنت"
+    insult = save_state[uid]["text"]
+    if insult in stored_insults[kind]:
+        txt = "⚠️ هذه الشتيمة موجودة سابقًا."
+    else:
+        stored_insults[kind].add(insult)
+        txt = "✅ تم حفظ الشتيمة."
+    save_state.pop(uid, None)
+    await e.edit(f"{txt}\nالفئة: {kind}", buttons=menu())
+
+# ─── عرض الشتائم ولد ─────────────────────────────────────────
+@bot.on(events.CallbackQuery(data=b"show_insults_boy"))
+async def show_boy_insults(e):
+    if stored_insults["ولد"]:
+        txt = "🧑 شتائم الولد:\n" + "\n".join(f"- {i}" for i in stored_insults["ولد"])
+    else:
+        txt = "🚫 لا توجد شتائم ولد."
+    await e.edit(txt, buttons=menu())
+
+# ─── عرض الشتائم بنت ─────────────────────────────────────────
+@bot.on(events.CallbackQuery(data=b"show_insults_girl"))
+async def show_girl_insults(e):
+    if
