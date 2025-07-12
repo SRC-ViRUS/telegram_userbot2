@@ -173,13 +173,15 @@ async def _(e):
 async def attack_start(event):
     attack_state[event.sender_id] = {"step": 1}
     buttons = [
-        [Button.inline("👦 ولد", b"attack_type:ولد"), Button.inline("👧 بنت", b"attack_type:بنت")]
+        [Button.inline("👦 ولد", b"attack_type:boy"), Button.inline("👧 بنت", b"attack_type:girl")]
     ]
     await event.edit("🔥 اختر نوع الهجوم (الشتائم):", buttons=buttons)
 
-@bot.on(events.CallbackQuery(pattern=b"attack_type:(.+)"))
+@bot.on(events.CallbackQuery(pattern=b"attack_type:(boy|girl)"))
 async def attack_choose_type(event):
-    kind = event.data.decode().split(":")[1]
+    kind_map = {"boy": "ولد", "girl": "بنت"}
+    kind_key = event.data.decode().split(":")[1]
+    kind = kind_map.get(kind_key, "ولد")
     attack_state[event.sender_id]["type"] = kind
     attack_state[event.sender_id]["step"] = 2
     await event.edit(f"🔥 اختر @username أو ID المستهدف:")
