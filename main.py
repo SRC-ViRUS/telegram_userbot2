@@ -6,10 +6,10 @@ from telethon.tl.functions.account import UpdateProfileRequest
 from telethon.tl.functions.channels import GetFullChannelRequest
 from telethon.tl.functions.messages import GetFullChatRequest
 
-# ——— بيانات الاتصال ———
+# ——— بيانات البوت ———
 api_id = 11765349
 api_hash = '67d3351652cc42239a42df8c17186d49'
-session_string = "1ApWapzMBu3LbcZl_ZaB1NarDuo3EmApdJbr4sseU-pxJwoSnVt6M9BkgJ07IPt_6h4fDH6xGKqkxWJOPg3QnRFsucx8TAfxX5HVJgDdvlVbnkpCrl1ixinR7nVSoF_ydbgsu884_g9HY0wN3iHJ8ARmF0olQIIgC2YomNJbmXmigp_uJximTE1tZAQJDLJc_Qsp3TuT4trb7txpPSP0d6DUEt6pdmxlWrCNLH7VRntWchwIUg-IjAlF1Mz8dhkDP5MLDuIbd2qV5xizf2I0sdTiUSwwohES769qMKg_K4SEnwNQybqlZmCpPTGm5xuN8AIkJ8NveU4UezgFGSwW0l5qNaJiGUPw=" 
+session_string = "1ApWapzMBu3LbcZl_ZaB1NarDuo3EmApdJbr4sseU-pxJwoSnVt6M9BkgJ07IPt_6h4fDH6xGKqkxWJOPg3QnRFsucx8TAfxX5HVJgDdvlVbnkpCrl1ixinR7nVSoF_ydbgsu884_g9HY0wN3iHJ8ARmF0olQIIgC2YomNJbmXmigp_uJximTE1tZAQJDLJc_Qsp3TuT4trb7txpPSP0d6DUEt6pdmxlWrCNLH7VRntWchwIUg-IjAlF1Mz8dhkDP5MLDuIbd2qV5xizf2I0sdTiUSwwohES769qMKg_K4SEnwNQybqlZmCpPTGm5xuN8AIkJ8NveU4UezgFGSwW0l5qNaJiGUPw="
 client = TelegramClient(StringSession(session_string), api_id, api_hash)
 
 # ——— مجلدات التخزين ———
@@ -19,35 +19,41 @@ STAMPS_FILE = "stamps/stamps.json"
 
 # ——— تحميل البصمات المحفوظة ———
 if os.path.isfile(STAMPS_FILE):
-    with open(STAMPS_FILE) as f:
+    with open(STAMPS_FILE, "r", encoding="utf-8") as f:
         stamps = json.load(f)
 else:
     stamps = {}
 
-# ——— متغيرات عامة ———
+# ——— المتغيرات العالمية ———
 muted_private, muted_groups = set(), {}
 previous_name, change_name_task = None, None
 imitate_users_data = {}
 
 # ——— دوال مساعدة ———
 async def is_owner(evt):
-    return evt.sender_id == (await client.get_me()).id
+    me = await client.get_me()
+    return evt.sender_id == me.id
 
 def save_stamps():
-    with open(STAMPS_FILE, "w") as f:
-        json.dump(stamps, f)
+    with open(STAMPS_FILE, "w", encoding="utf-8") as f:
+        json.dump(stamps, f, ensure_ascii=False)
 
 async def extract_user_id(evt, arg):
     if evt.is_reply:
         rep = await evt.get_reply_message()
-        if rep: return rep.sender_id
+        if rep:
+            return rep.sender_id
     if arg:
-        if arg.isdigit(): return int(arg)
-        try: return (await client.get_entity(arg)).id
-        except: return None
+        if arg.isdigit():
+            return int(arg)
+        try:
+            entity = await client.get_entity(arg)
+            return entity.id
+        except:
+            return None
     return None
 
-# ——— تغيير الاسم حسب الوقت ———
+# ——— تغيير الاسم المؤقت ———
 async def change_name_loop():
     global previous_name
     previous_name = (await client.get_me()).first_name
@@ -62,26 +68,34 @@ async def change_name_loop():
 @client.on(events.NewMessage(pattern=r"\.اسم مؤقت"))
 async def cmd_tempname(evt):
     global change_name_task
-    if not await is_owner(evt): return
+    if not await is_owner(evt):
+        return
     if change_name_task and not change_name_task.done():
-        return await evt.reply("🔄 مفعل مسبقًا.")
+        await evt.reply("🔄 مفعل سابقًا.")
+        return
     change_name_task = asyncio.create_task(change_name_loop())
-    await evt.reply("✅ تم التفعيل.")
+    await evt.reply("✅ تم تفعيل تغيير الاسم المؤقت.")
 
 @client.on(events.NewMessage(pattern=r"\.ايقاف الاسم"))
 async def cmd_stopname(evt):
     global change_name_task, previous_name
-    if not await is_owner(evt): return
-    if change_name_task: change_name_task.cancel(); change_name_task = None
+    if not await is_owner(evt):
+        return
+    if change_name_task:
+        change_name_task.cancel()
+        change_name_task = None
     if previous_name:
-        try: await client(UpdateProfileRequest(first_name=previous_name))
-        except: pass
-    await evt.reply("🛑 تم الإيقاف.")
+        try:
+            await client(UpdateProfileRequest(first_name=previous_name))
+        except:
+            pass
+    await evt.reply("🛑 تم إيقاف تغيير الاسم.")
 
 # ——— فحص ———
 @client.on(events.NewMessage(pattern=r"\.فحص"))
 async def cmd_ping(evt):
-    if not await is_owner(evt): return
+    if not await is_owner(evt):
+        return
     m = await evt.edit("✅ البوت شغال.")
     await client.send_message("me", "✨ البوت بخير.")
     await asyncio.sleep(10)
@@ -90,7 +104,8 @@ async def cmd_ping(evt):
 # ——— كشف معلومات القروب ———
 @client.on(events.NewMessage(pattern=r"\.كشف"))
 async def cmd_info(evt):
-    if not await is_owner(evt): return
+    if not await is_owner(evt):
+        return
     chat = await evt.get_chat()
     try:
         if getattr(chat, 'megagroup', False) or getattr(chat, 'broadcast', False):
@@ -106,51 +121,72 @@ async def cmd_info(evt):
             about = full.full_chat.about or "—"
             members = len(full.full_chat.participants)
     except:
-        name, cid, members, about = getattr(chat, 'title', '❓'), getattr(chat, 'id', '❓'), "❓", "❓"
+        name = getattr(chat, 'title', '❓')
+        cid = getattr(chat, 'id', '❓')
+        members = "❓"
+        about = "❓"
     await evt.reply(f"📊 **معلومات**\n🔹 الاسم: {name}\n🔹 الايدي: `{cid}`\n🔹 الأعضاء: {members}\n🔹 الوصف:\n{about}")
 
-# ——— الكتم / فك الكتم ———
+# ——— كتم / فك الكتم ———
 @client.on(events.NewMessage(pattern=r"\.كتم$", func=lambda e: e.is_reply))
 async def cmd_mute(evt):
-    if not await is_owner(evt): return
+    if not await is_owner(evt):
+        return
     rep = await evt.get_reply_message()
     (muted_private if evt.is_private else muted_groups.setdefault(evt.chat_id, set())).add(rep.sender_id)
-    m = await evt.edit("🔇"); await asyncio.sleep(1); await m.delete()
+    m = await evt.edit("🔇")
+    await asyncio.sleep(1)
+    await m.delete()
 
 @client.on(events.NewMessage(pattern=r"\.الغاء الكتم$", func=lambda e: e.is_reply))
 async def cmd_unmute(evt):
-    if not await is_owner(evt): return
+    if not await is_owner(evt):
+        return
     rep = await evt.get_reply_message()
     (muted_private if evt.is_private else muted_groups.get(evt.chat_id, set())).discard(rep.sender_id)
-    m = await evt.edit("🔊"); await asyncio.sleep(1); await m.delete()
+    m = await evt.edit("🔊")
+    await asyncio.sleep(1)
+    await m.delete()
 
 @client.on(events.NewMessage(pattern=r"\.قائمة الكتم$"))
 async def cmd_listmutes(evt):
-    if not await is_owner(evt): return
+    if not await is_owner(evt):
+        return
     txt = "📋 **المكتومون**\n"
     for u in muted_private:
-        try: txt += f"🔸 خاص: {(await client.get_entity(u)).first_name}\n"
-        except: pass
+        try:
+            user = await client.get_entity(u)
+            txt += f"🔸 خاص: {user.first_name}\n"
+        except:
+            pass
     for cid, users in muted_groups.items():
         if users:
             try:
                 chat = await client.get_entity(cid)
                 txt += f"\n🔹 {chat.title}:\n"
                 for u in users:
-                    try: txt += f"  — {(await client.get_entity(u)).first_name}\n"
-                    except: pass
-            except: pass
+                    try:
+                        user = await client.get_entity(u)
+                        txt += f"  — {user.first_name}\n"
+                    except:
+                        pass
+            except:
+                pass
     await evt.respond(txt if txt.strip() != "📋 **المكتومون**" else "لا أحد.")
 
 @client.on(events.NewMessage(pattern=r"\.مسح الكتم$"))
 async def cmd_clearmutes(evt):
-    if not await is_owner(evt): return
-    muted_private.clear(); muted_groups.clear()
-    m = await evt.edit("🗑️"); await asyncio.sleep(1); await m.delete()
+    if not await is_owner(evt):
+        return
+    muted_private.clear()
+    muted_groups.clear()
+    m = await evt.edit("🗑️")
+    await asyncio.sleep(1)
+    await m.delete()
 
-# ——— حفظ الوسائط المؤقتة ———
+# ——— حذف رسائل المكتومين + حفظ الوسائط المؤقتة ———
 @client.on(events.NewMessage(incoming=True))
-async def auto_save_and_guard(evt):
+async def guard_and_auto_save(evt):
     if (evt.is_private and evt.sender_id in muted_private) or \
        (evt.chat_id in muted_groups and evt.sender_id in muted_groups[evt.chat_id]):
         return await evt.delete()
@@ -158,87 +194,123 @@ async def auto_save_and_guard(evt):
         try:
             path = await evt.download_media("downloads/")
             await client.send_file("me", path, caption="📸 بصمة محفوظة تلقائيًا")
-        except: pass
+        except:
+            pass
 
-# ——— التقليد ———
+# ——— أوامر التقليد ———
 @client.on(events.NewMessage(pattern=r"\.تقليد(?:\s+(\S+))?$"))
 async def cmd_enable_imitate(evt):
-    if not await is_owner(evt): return
+    if not await is_owner(evt):
+        return
     uid = await extract_user_id(evt, evt.pattern_match.group(1))
-    if not uid: return await evt.reply("❗ رد على رسالة الشخص أو اكتب يوزره/آيديه.")
+    if not uid:
+        await evt.reply("❗ رد على رسالة الشخص أو اكتب يوزره/آيديه.")
+        return
     imitate_users_data[uid] = None
-    await evt.edit("✅ تم تفعيل التقليد."); await asyncio.sleep(1); await evt.delete()
+    await evt.edit("✅ تم تفعيل التقليد.")
+    await asyncio.sleep(1)
+    await evt.delete()
 
 @client.on(events.NewMessage(pattern=r"\.لاتقلد(?:\s+(\S+))?$"))
 async def cmd_disable_imitate(evt):
-    if not await is_owner(evt): return
+    if not await is_owner(evt):
+        return
     uid = await extract_user_id(evt, evt.pattern_match.group(1))
-    if not uid: return await evt.reply("❗ رد على رسالة الشخص أو اكتب يوزره/آيديه.")
+    if not uid:
+        await evt.reply("❗ رد على رسالة الشخص أو اكتب يوزره/آيديه.")
+        return
     imitate_users_data.pop(uid, None)
-    await evt.edit("🚫 تم إلغاء التقليد."); await asyncio.sleep(1); await evt.delete()
+    await evt.edit("🚫 تم إلغاء التقليد.")
+    await asyncio.sleep(1)
+    await evt.delete()
 
 @client.on(events.NewMessage(incoming=True))
 async def imitator(evt):
     me = await client.get_me()
     uid = evt.sender_id
-    if uid == me.id or (evt.sender and evt.sender.bot): return
-    if uid not in imitate_users_data: return
+    if uid == me.id or (evt.sender and evt.sender.bot):
+        return
+    if uid not in imitate_users_data:
+        return
     try:
         if evt.media:
             file = await evt.download_media()
-            await client.send_file(evt.chat_id, file, caption=evt.text if evt.text else None, voice_note=evt.document.mime_type=="audio/ogg")
+            await client.send_file(evt.chat_id, file, caption=evt.text if evt.text else None)
+            try:
+                os.remove(file)
+            except:
+                pass
         elif evt.text:
             await client.send_message(evt.chat_id, evt.text)
     except Exception as e:
-        print("❗خطأ تقليد:", e)
+        print("❗ خطأ تقليد:", e)
 
-# ——— إدارة البصمات ———
+# ——— أوامر البصمات ———
 @client.on(events.NewMessage(pattern=r"\.حفظبصمة (\S+)$", func=lambda e: e.is_reply))
 async def cmd_save_stamp(evt):
-    if not await is_owner(evt): return
+    if not await is_owner(evt):
+        return
     alias = evt.pattern_match.group(1).strip(". ")
     rep = await evt.get_reply_message()
-    if not rep or not rep.media: return await evt.reply("❗ رد على ملف صوتي/فيديو.")
+    if not rep or not rep.media:
+        return await evt.reply("❗ رد على ملف صوتي/فيديو.")
     path = await rep.download_media(f"stamps/{alias}")
-    stamps[alias] = path; save_stamps()
+    stamps[alias] = path
+    save_stamps()
     await evt.reply(f"✅ حُفظت باسم .{alias}")
 
 @client.on(events.NewMessage(pattern=r"\.حذفبصمة (\S+)$"))
 async def cmd_del_stamp(evt):
-    if not await is_owner(evt): return
+    if not await is_owner(evt):
+        return
     alias = evt.pattern_match.group(1).strip(". ")
     if alias in stamps:
-        try: os.remove(stamps[alias])
-        except: pass
-        stamps.pop(alias); save_stamps()
+        try:
+            os.remove(stamps[alias])
+        except:
+            pass
+        stamps.pop(alias)
+        save_stamps()
         await evt.reply("🗑️ حُذفت.")
     else:
         await evt.reply("❌ غير موجودة.")
 
 @client.on(events.NewMessage(pattern=r"\.قائمةبصمات$"))
 async def cmd_list_stamps(evt):
-    if not await is_owner(evt): return
-    if not stamps: return await evt.reply("لا توجد بصمات.")
+    if not await is_owner(evt):
+        return
+    if not stamps:
+        return await evt.reply("لا توجد بصمات.")
     await evt.respond("🎙️ **البصمات:**\n" + "\n".join(f"• .{a}" for a in stamps))
 
 @client.on(events.NewMessage(pattern=r"^\.(\S+)$"))
 async def send_stamp(evt):
     alias = evt.pattern_match.group(1)
     if alias in stamps:
-        try: await evt.respond(file=stamps[alias])
-        except Exception as e: await evt.reply(f"⚠️ {e}")
+        try:
+            await evt.respond(file=stamps[alias])
+        except Exception as e:
+            await evt.reply(f"⚠️ {e}")
 
 # ——— قائمة الأوامر ———
 @client.on(events.NewMessage(pattern=r"\.اوامر$"))
 async def cmd_help(evt):
-    if not await is_owner(evt): return
+    if not await is_owner(evt):
+        return
     await evt.respond(
         "🧠 **قائمة الأوامر**:\n"
-        "• .فحص\n• .كشف\n• .كتم (رد)\n• .الغاء الكتم (رد)\n"
-        "• .قائمة الكتم\n• .مسح الكتم\n"
+        "• .فحص\n"
+        "• .كشف\n"
+        "• .كتم (رد)\n"
+        "• .الغاء الكتم (رد)\n"
+        "• .قائمة الكتم\n"
+        "• .مسح الكتم\n"
         "• .اسم مؤقت / .ايقاف الاسم\n"
-        "• .تقليد (رد أو يوزر/ID)\n• .لاتقلد (رد أو يوزر/ID)\n"
-        "• .حفظبصمة <اسم> (رد)\n• .حذفبصمة <اسم>\n• .قائمةبصمات\n"
+        "• .تقليد (رد أو يوزر/ID)\n"
+        "• .لاتقلد (رد أو يوزر/ID)\n"
+        "• .حفظبصمة <اسم> (رد)\n"
+        "• .حذفبصمة <اسم>\n"
+        "• .قائمةبصمات\n"
         "• .<اسم>  لإرسال البصمة\n"
     )
 
