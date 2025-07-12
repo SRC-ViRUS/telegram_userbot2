@@ -12,13 +12,14 @@ api_id = 20507759
 api_hash = "225d3a24d84c637b3b816d13cc7bd766"
 bot_token = "7644214767:AAGOlYEiyF6yFWxiIX_jlwo9Ssj_Cb95oLU"
 
-SESS_FILE = "sessions.json"  # ملف تخزين الجلسات
+SESS_FILE = "sessions.json"
 
-# متغيرات عامة
 sessions = {}
 clients = {}
 current_chat = None
 adding_state = {}
+
+waiting_for_link = {}  # { user_id: True } المستخدمين في انتظار رابط
 
 bot = TelegramClient("bot", api_id, api_hash)
 
@@ -81,44 +82,47 @@ async def reload_sessions(e):
     await e.edit("✅ تمت إعادة التشغيل.", buttons=main_menu())
 
 @bot.on(events.CallbackQuery(data=b"connect"))
-async def ask_link(e):
-    await e.answer()
-    await e.edit("📨 أرسل الآن رابط الكروب أو القناة أو الدعوة:")
+async def on_connect_button(event):
+    user_id = event.sender_id
+    waiting_for_link[user_id] = True
+    await event.answer()
+    await event.edit("📨 أرسل الآن رابط الكروب أو القناة أو الدعوة:")
 
-    async def wait_for_link():
-        while True:
-            msg = await bot.wait_for(events.NewMessage(from_users=e.sender_id))
-            if msg.text:
-                return msg.text.strip()
+@bot.on(events.NewMessage)
+async def on_new_message(event):
+    user_id = event.sender_id
+    if user_id in waiting_for_link:
+        link = event.raw_text.strip()
+        waiting_for_link.pop(user_id)
+        await handle_link(event, link)
 
+async def handle_link(event, link):
     try:
-        link = await wait_for_link()
-
         if "joinchat" in link or "+" in link:
             code = link.split("+")[-1]
             ent = (await bot(ImportChatInviteRequest(code))).chats[0]
         else:
             ent = await bot.get_entity(link)
-
     except Exception as err:
-        await e.respond(f"❌ الرابط غير صالح أو غير معروف:\n`{err}`", buttons=main_menu())
+        await event.respond(f"❌ الرابط غير صالح أو غير معروف:\n`{err}`", buttons=main_menu())
         return
 
     global current_chat
     current_chat = ent
 
-    await e.respond("🔁 جارٍ صعود الحسابات...")
+    await event.respond("🔁 جارٍ صعود الحسابات...")
+
     for name, cl in clients.items():
         try:
             await cl(JoinChannelRequest(ent))
             await asyncio.sleep(1)
-            await bot.send_message(e.chat_id, f"✅ [{name}] صعد الاتصال")
+            await bot.send_message(event.chat_id, f"✅ [{name}] صعد الاتصال")
         except UserAlreadyParticipantError:
-            await bot.send_message(e.chat_id, f"✅ [{name}] موجود مسبقاً")
+            await bot.send_message(event.chat_id, f"✅ [{name}] موجود مسبقاً")
         except Exception as ex:
-            await bot.send_message(e.chat_id, f"❌ [{name}] خطأ: {ex}")
+            await bot.send_message(event.chat_id, f"❌ [{name}] خطأ: {ex}")
 
-    await bot.send_message(e.chat_id, "✅ تم صعود جميع الحسابات.", buttons=main_menu())
+    await bot.send_message(event.chat_id, "✅ تم صعود جميع الحسابات.", buttons=main_menu())
 
 @bot.on(events.CallbackQuery(data=b"disconnect"))
 async def leave_all(e):
