@@ -45,9 +45,7 @@ async def join_channel(client, target):
         print(f"خطأ بالانضمام: {e}")
         return False
 
-async def is_owner(event):
-    me = await bot.get_me()
-    return event.sender_id == me.id
+# حذف دالة is_owner لأنها غير مستخدمة الآن
 
 # -- أوامر الأزرار -- #
 
@@ -124,8 +122,6 @@ async def export_sessions(e):
 
 @bot.on(events.CallbackQuery(data=b"khbth_menu"))
 async def khbth_menu_handler(e):
-    if not await is_owner(e):
-        return await e.answer("🚫 هذا الأمر خاص بالمالك فقط.", alert=True)
     await e.edit(
         "🔥 أمر خبث:\nأرسل الأمر بهذا الشكل:\n`.خبث @user1 @user2 ... نص الرسالة`",
         buttons=menu()
@@ -238,9 +234,6 @@ async def on_new_message(m):
 
     # أمر خبث
     if txt.startswith(".خبث"):
-        if not await is_owner(m):
-            return await m.reply("🚫 هذا الأمر خاص بالمالك فقط.")
-
         parts = txt.split(maxsplit=2)
         if len(parts) < 3:
             return await m.reply("❌ الصيغة: .خبث @user1 @user2 ... نص الرسالة")
@@ -261,19 +254,6 @@ async def on_new_message(m):
                     print(f"[{n}] خطأ في أمر خبث: {e}")
 
         return await m.reply("✅ تم إرسال الرسائل الموقتة وحُذفت بعد 3 ثواني.")
-
-@bot.on(events.CallbackQuery(data=b"export_sessions"))
-async def export_sessions(e):
-    if not sessions:
-        return await e.answer("🚫 لا توجد جلسات.", alert=True)
-    msg = "📤 **الجلسات المحفوظة:**\n\n"
-    for user, sess in sessions.items():
-        msg += f"`{user}`:\n`{sess}`\n\n"
-    try:
-        await bot.send_message(e.sender_id, msg, parse_mode="md")
-        await e.answer("✅ تم الإرسال بالخاص.", alert=True)
-    except Exception:
-        await e.answer("❌ فشل الإرسال. تأكد من فتح الخاص مع البوت.", alert=True)
 
 @bot.on(events.NewMessage(pattern=r"^/start$"))
 async def start(e): 
