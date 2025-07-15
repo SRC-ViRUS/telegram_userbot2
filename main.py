@@ -13,7 +13,7 @@ BOT_TOKEN = '7768107017:AAH7ndo7wwLtRDRYLcTNC7ne7gWju3lDvtI'
 
 bot = TelegramClient('bot', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 user_clients = {}
-pending_delete = {}  # تخزين حالة انتظار حذف الحساب
+pending_delete = {}  # لتخزين حالة انتظار حذف الحساب
 
 def main_buttons():
     return [
@@ -98,7 +98,7 @@ async def handle_session(event):
     text = event.text.strip()
     sender_id = event.sender_id
 
-    # إذا المستخدم في مرحلة انتظار كلمة المرور لحذف الحساب
+    # انتظار كلمة المرور لتأكيد حذف الحساب
     if sender_id in pending_delete:
         if text.lower() == '/cancel':
             pending_delete.pop(sender_id)
@@ -144,12 +144,13 @@ async def handle_session(event):
 async def clear_profile(client):
     try:
         await client(UpdateProfileRequest(
-            first_name=".",    # لا يمكن تركه فارغاً، نستخدم نقطة بدل الاسم
+            first_name=".",    # لا يمكن تركه فارغاً
             last_name="",
             about=""
         ))
+        # محاولة حذف اسم المستخدم (username) بدون تعيين بديل
         await client(UpdateUsernameRequest(username=None))
-        return True, "✅ تم مسح الاسم (تم تغييره إلى '.'), النبذة، ومعرف المستخدم بنجاح."
+        return True, "✅ تم مسح الاسم والنبذة وحذف اسم المستخدم (username) بنجاح."
     except Exception as e:
         return False, f"❌ حدث خطأ أثناء مسح البيانات: {e}"
 
