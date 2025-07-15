@@ -1,195 +1,168 @@
+# -*- coding: utf-8 -*-
 from telethon import TelegramClient, events, Button
 from telethon.sessions import StringSession
 from telethon.tl.functions.account import (
-    UpdateProfileRequest,
-    UpdateUsernameRequest,
-    DeleteAccountRequest
+    UpdateProfileRequest, UpdateUsernameRequest, DeleteAccountRequest
 )
 from telethon.errors import SessionPasswordNeededError
+import re
 
-API_ID = 22494292
+API_ID   = 22494292
 API_HASH = '0bd3915b6b1a0a64b168d0cc852a0e61'
 BOT_TOKEN = '7768107017:AAH7ndo7wwLtRDRYLcTNC7ne7gWju3lDvtI'
 
 bot = TelegramClient('bot', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
-user_clients = {}
-pending_delete = {}  # لتخزين حالة انتظار حذف الحساب
-pending_new_username = {}  # لتخزين حالة انتظار اسم المستخدم الجديد بعد المسح
 
+user_clients           = {}   # {uid: {"client": TelegramClient}}
+pending_delete         = {}   # حذف الحساب نهائياً
+pending_new_username   = {}   # بعد مسح البيانات – اسم مستخدم جديد
+pending_change_name    = {}   # انتظار الاسم الجديد
+pending_change_uname   = {}   # انتظار يوزر جديد
+
+# ---------- أزرار الواجهة ----------
 def main_buttons():
     return [
         [Button.inline("📩 أرسل StringSession", b"send_session")],
-        [Button.inline("📱 عرض رقم الهاتف", b"show_phone")],
-        [Button.inline("🗑️ مسح بيانات الحساب", b"clear_profile")],
-        [Button.inline("⚠️ حذف الحساب نهائياً", b"delete_account")],
-        [Button.inline("📋 عرض الجلسات", b"list_sessions")],
+        [Button.inline("📱 عرض رقم الهاتف",       b"show_phone")],
+        [Button.inline("🗑️ مسح بيانات الحساب",    b"clear_profile")],
+        [Button.inline("🖼️ حذف جميع الصور",       b"delete_photos")],
+        [Button.inline("✏️ تغيير الاسم",          b"change_name")],
+        [Button.inline("🔄 تغيير اسم المستخدم",   b"change_uname")],
+        [Button.inline("⚠️ حذف الحساب نهائياً",  b"delete_account")],
+        [Button.inline("📋 عرض الجلسات",         b"list_sessions")],
         [Button.inline("🚪 إنهاء جميع الجلسات عدا حسابك", b"logout_all")]
     ]
 
+# ---------- /start ----------
 @bot.on(events.NewMessage(pattern='/start'))
 async def start(event):
     await event.respond("مرحباً! استخدم الأزرار أدناه للتحكم:", buttons=main_buttons())
 
+# ---------- التعامل مع الأزرار ----------
 @bot.on(events.CallbackQuery)
 async def callback(event):
-    sender_id = event.sender_id
-    data = event.data.decode('utf-8')
+    uid  = event.sender_id
+    data = event.data.decode()
 
+    # === إرسال جلسة ===
     if data == "send_session":
         await event.edit("📩 أرسل لي StringSession الخاص بك كرسالة نصية.", buttons=main_buttons())
 
+    # === عرض رقم الهاتف ===
     elif data == "show_phone":
-        info = user_clients.get(sender_id)
+        info = user_clients.get(uid)
         if not info:
-            await event.answer("❌ لم ترسل StringSession بعد.", alert=True)
-            return
-        client = info["client"]
-        me = await client.get_me()
+            await event.answer("❌ لم ترسل StringSession بعد.", alert=True); return
+        me = await info["client"].get_me()
         await event.answer(f"رقم هاتفك: {me.phone or 'غير متوفر'}", alert=True)
 
+    # === مسح البيانات (اسم + نبذة + حذف يوزر) ===
     elif data == "clear_profile":
-        info = user_clients.get(sender_id)
+        info = user_clients.get(uid)
         if not info:
-            await event.answer("❌ لم ترسل StringSession بعد.", alert=True)
-            return
-        client = info["client"]
-        success, msg = await clear_profile(client)
-        if success:
-            pending_new_username[sender_id] = True
-            await event.edit(msg + "\n\n✏️ الآن أرسل اسم المستخدم الجديد (بدون @):", buttons=[
-                [Button.inline("إلغاء", b"cancel_new_username")]
-            ])
+            await event.answer("❌ لم ترسل StringSession بعد.", alert=True); return
+        ok, msg = await clear_profile(info["client"])
+        if ok:
+            pending_new_username[uid] = True
+            await event.edit(msg + "\n\n✏️ أرسل اسم المستخدم الجديد (بدون @) أو /skip لتجاوز:", 
+                             buttons=[[Button.inline("إلغاء", b"cancel_new_username")]])
         else:
             await event.edit(msg, buttons=main_buttons())
 
+    # --- إلغاء انتظار اسم مستخدم جديد بعد المسح ---
     elif data == "cancel_new_username":
-        pending_new_username.pop(sender_id, None)
-        await event.edit("❌ تم إلغاء تعيين اسم المستخدم الجديد.", buttons=main_buttons())
+        pending_new_username.pop(uid, None)
+        await event.edit("❌ تم الإلغاء.", buttons=main_buttons())
 
+    # === حذف كلّ صور البروفايل ===
+    elif data == "delete_photos":
+        info = user_clients.get(uid)
+        if not info:
+            await event.answer("❌ لم ترسل StringSession بعد.", alert=True); return
+        ok, msg = await delete_all_photos(info["client"])
+        await event.edit(msg, buttons=main_buttons())
+
+    # === بدء تغيير الاسم ===
+    elif data == "change_name":
+        if uid not in user_clients:
+            await event.answer("❌ لم ترسل StringSession بعد.", alert=True); return
+        pending_change_name[uid] = True
+        await event.edit("✏️ أرسل الاسم الجديد (يمكنك كتابة: الاسم أو الاسم اللقب)\nأو /cancel للإلغاء.",
+                         buttons=[[Button.inline("إلغاء", b"cancel_change_name")]])
+
+    elif data == "cancel_change_name":
+        pending_change_name.pop(uid, None)
+        await event.edit("❌ تم إلغاء تغيير الاسم.", buttons=main_buttons())
+
+    # === بدء تغيير اليوزر ===
+    elif data == "change_uname":
+        if uid not in user_clients:
+            await event.answer("❌ لم ترسل StringSession بعد.", alert=True); return
+        pending_change_uname[uid] = True
+        await event.edit("🔄 أرسل اسم المستخدم الجديد (بدون @) أو /cancel للإلغاء.",
+                         buttons=[[Button.inline("إلغاء", b"cancel_change_uname")]])
+
+    elif data == "cancel_change_uname":
+        pending_change_uname.pop(uid, None)
+        await event.edit("❌ تم إلغاء تغيير اسم المستخدم.", buttons=main_buttons())
+
+    # === حذف الحساب نهائياً ===
     elif data == "delete_account":
-        await event.edit(
-            "⚠️ هل أنت متأكد من حذف حسابك نهائياً؟\n"
-            "أرسل كلمة المرور (2FA) لتأكيد الحذف أو /cancel للإلغاء.",
-            buttons=[[Button.inline("إلغاء", b"cancel_delete")]]
-        )
-        pending_delete[sender_id] = {"step": "awaiting_password"}
+        await event.edit("⚠️ هل أنت متأكد من حذف حسابك نهائياً؟\n"
+                         "أرسل كلمة مرور 2FA للتأكيد أو /cancel للإلغاء.",
+                         buttons=[[Button.inline("إلغاء", b"cancel_delete")]])
+        pending_delete[uid] = True
 
     elif data == "cancel_delete":
-        pending_delete.pop(sender_id, None)
+        pending_delete.pop(uid, None)
         await event.edit("❌ تم إلغاء حذف الحساب.", buttons=main_buttons())
 
+    # === عرض الجلسات ===
     elif data == "list_sessions":
         if not user_clients:
-            await event.edit("⚠️ لا توجد جلسات مسجلة حالياً.", buttons=main_buttons())
-            return
-        text = "📋 الجلسات الحالية:\n"
-        for uid, info in user_clients.items():
-            client = info["client"]
-            try:
-                me = await client.get_me()
-                name = f"{me.first_name} {me.last_name or ''}".strip()
-            except:
-                name = "غير متوفر"
-            text += f"- معرف: {uid} | الاسم: {name}\n"
-        await event.edit(text, buttons=main_buttons())
+            await event.edit("⚠️ لا توجد جلسات.", buttons=main_buttons()); return
+        txt = "📋 الجلسات:\n"
+        for i, (u, info) in enumerate(user_clients.items(), 1):
+            me = await info["client"].get_me()
+            txt += f"{i}- {u} | {me.first_name}\n"
+        await event.edit(txt, buttons=main_buttons())
 
+    # === إنهاء كل الجلسات الأخرى ===
     elif data == "logout_all":
-        count = 0
-        for uid, info in list(user_clients.items()):
-            if uid == sender_id:
-                continue
-            client = info["client"]
-            await client.disconnect()
-            user_clients.pop(uid)
-            count += 1
-        await event.edit(f"✅ تم إنهاء {count} جلسة من جميع الجلسات عدا جلستك.", buttons=main_buttons())
+        cnt = 0
+        for other_uid, info in list(user_clients.items()):
+            if other_uid == uid: continue
+            await info["client"].disconnect()
+            user_clients.pop(other_uid); cnt += 1
+        await event.edit(f"✅ تم إنهاء {cnt} جلسة.", buttons=main_buttons())
 
+# ---------- استقبال الرسائل (جلسة أو أوامر نصية) ----------
 @bot.on(events.NewMessage)
-async def handle_session(event):
-    text = event.text.strip()
-    sender_id = event.sender_id
+async def handle_msg(event):
+    uid  = event.sender_id
+    txt  = event.text.strip()
 
-    # انتظار كلمة المرور لتأكيد حذف الحساب
-    if sender_id in pending_delete:
-        if text.lower() == '/cancel':
-            pending_delete.pop(sender_id)
-            await event.respond("❌ تم إلغاء حذف الحساب.", buttons=main_buttons())
-            return
-
-        password = text
-        info = user_clients.get(sender_id)
+    # -------- انتظار كلمة مرور حذف الحساب --------
+    if uid in pending_delete:
+        if txt.lower() == "/cancel":
+            pending_delete.pop(uid); await event.respond("❌ تم الإلغاء.", buttons=main_buttons()); return
+        info = user_clients.get(uid)
         if not info:
-            await event.respond("❌ لم ترسل StringSession بعد. أرسلها أولاً.")
-            pending_delete.pop(sender_id)
-            return
-        client = info["client"]
-
+            pending_delete.pop(uid); await event.respond("❌ لا توجد جلسة."); return
         try:
-            await client(DeleteAccountRequest(reason=password))
-            await client.disconnect()
-            user_clients.pop(sender_id)
-            pending_delete.pop(sender_id)
-            await event.respond("✅ تم حذف الحساب نهائياً. مع السلامة!", buttons=main_buttons())
+            await info["client"](DeleteAccountRequest(reason=txt))
+            await info["client"].disconnect()
+            user_clients.pop(uid); pending_delete.pop(uid)
+            await event.respond("✅ تم حذف الحساب نهائياً.")
         except Exception as e:
-            await event.respond(f"❌ فشل حذف الحساب: {e}\n"
-                                "تأكد من أن كلمة المرور صحيحة أو أن الحساب ليس محميًا بكلمة مرور أخرى.")
+            await event.respond(f"❌ فشل حذف الحساب: {e}")
         return
 
-    # انتظار اسم المستخدم الجديد بعد مسح البيانات
-    if sender_id in pending_new_username:
-        new_username = text
-        if new_username.startswith("@"):
-            new_username = new_username[1:]  # إزالة @ إذا أرسلها المستخدم
-
-        # التحقق من صحة اسم المستخدم: فقط أحرف وأرقام وتحت _ لا يحتوي فراغات أو رموز أخرى
-        import re
-        if not re.match(r"^[a-zA-Z0-9_]{5,32}$", new_username):
-            await event.respond("❌ اسم المستخدم غير صالح. يجب أن يحتوي فقط على أحرف وأرقام و_، وطوله من 5 إلى 32 حرفًا.")
-            return
-
-        info = user_clients.get(sender_id)
-        if not info:
-            await event.respond("❌ لم ترسل StringSession بعد. أرسلها أولاً.")
-            pending_new_username.pop(sender_id)
-            return
-        client = info["client"]
-
-        try:
-            await client(UpdateUsernameRequest(username=new_username))
-            pending_new_username.pop(sender_id)
-            await event.respond(f"✅ تم تعيين اسم المستخدم الجديد: @{new_username}", buttons=main_buttons())
-        except Exception as e:
-            await event.respond(f"❌ فشل تعيين اسم المستخدم: {e}\n"
-                                "تأكد من أن اسم المستخدم غير محجوز أو مخالف لسياسات تيليجرام.")
-        return
-
-    # استقبال StringSession
-    if len(text) > 50 and ' ' not in text and sender_id not in user_clients:
-        try:
-            client = TelegramClient(StringSession(text), API_ID, API_HASH)
-            await client.start()
-            me = await client.get_me()
-            user_clients[sender_id] = {"client": client, "name": me.first_name}
-            await event.respond(
-                f"✅ تم تسجيل الدخول باسم {me.first_name}.\n"
-                f"📱 رقم الهاتف: {me.phone or 'غير متوفر'}",
-                buttons=main_buttons()
-            )
-        except SessionPasswordNeededError:
-            await event.respond("🔐 الحساب محمي بـ 2FA، يرجى إرسال كلمة المرور (قيد التطوير).")
-        except Exception as e:
-            await event.respond(f"❌ خطأ: {e}")
-
-async def clear_profile(client):
-    try:
-        await client(UpdateProfileRequest(
-            first_name=".",  # لا يمكن ترك الاسم الأول فارغًا
-            last_name="",
-            about=""
-        ))
-        await client(UpdateUsernameRequest(username=""))  # حذف اسم المستخدم القديم
-        return True, "✅ تم مسح الاسم والنبذة وحذف اسم المستخدم (username) بنجاح."
-    except Exception as e:
-        return False, f"❌ حدث خطأ أثناء مسح البيانات: {e}"
-
-bot.run_until_disconnected()
+    # -------- انتظار اسم مستخدم جديد بعد مسح البيانات --------
+    if uid in pending_new_username:
+        if txt.lower() in ("/cancel", "/skip"):
+            pending_new_username.pop(uid); await event.respond("تم التجاوز.", buttons=main_buttons()); return
+        uname = txt.lstrip("@")
+        if not re.match(r"^[a-zA-Z0-9_]{5,32}$", uname):
+            await event.respond("❌ اسم مستخدم غير صالح."); return
+        ok, msg = await set_username(user_clients[uid]["client"], uname)
