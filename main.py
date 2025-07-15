@@ -14,6 +14,7 @@ BOT_TOKEN = '7768107017:AAH7ndo7wwLtRDRYLcTNC7ne7gWju3lDvtI'
 bot = TelegramClient('bot', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 user_clients = {}
 pending_delete = {}  # لتخزين حالة انتظار حذف الحساب
+pending_new_username = {}  # لتخزين حالة انتظار اسم المستخدم الجديد بعد المسح
 
 def main_buttons():
     return [
@@ -53,7 +54,17 @@ async def callback(event):
             return
         client = info["client"]
         success, msg = await clear_profile(client)
-        await event.edit(msg, buttons=main_buttons())
+        if success:
+            pending_new_username[sender_id] = True
+            await event.edit(msg + "\n\n✏️ الآن أرسل اسم المستخدم الجديد (بدون @):", buttons=[
+                [Button.inline("إلغاء", b"cancel_new_username")]
+            ])
+        else:
+            await event.edit(msg, buttons=main_buttons())
+
+    elif data == "cancel_new_username":
+        pending_new_username.pop(sender_id, None)
+        await event.edit("❌ تم إلغاء تعيين اسم المستخدم الجديد.", buttons=main_buttons())
 
     elif data == "delete_account":
         await event.edit(
@@ -124,6 +135,34 @@ async def handle_session(event):
                                 "تأكد من أن كلمة المرور صحيحة أو أن الحساب ليس محميًا بكلمة مرور أخرى.")
         return
 
+    # انتظار اسم المستخدم الجديد بعد مسح البيانات
+    if sender_id in pending_new_username:
+        new_username = text
+        if new_username.startswith("@"):
+            new_username = new_username[1:]  # إزالة @ إذا أرسلها المستخدم
+
+        # التحقق من صحة اسم المستخدم: فقط أحرف وأرقام وتحت _ لا يحتوي فراغات أو رموز أخرى
+        import re
+        if not re.match(r"^[a-zA-Z0-9_]{5,32}$", new_username):
+            await event.respond("❌ اسم المستخدم غير صالح. يجب أن يحتوي فقط على أحرف وأرقام و_، وطوله من 5 إلى 32 حرفًا.")
+            return
+
+        info = user_clients.get(sender_id)
+        if not info:
+            await event.respond("❌ لم ترسل StringSession بعد. أرسلها أولاً.")
+            pending_new_username.pop(sender_id)
+            return
+        client = info["client"]
+
+        try:
+            await client(UpdateUsernameRequest(username=new_username))
+            pending_new_username.pop(sender_id)
+            await event.respond(f"✅ تم تعيين اسم المستخدم الجديد: @{new_username}", buttons=main_buttons())
+        except Exception as e:
+            await event.respond(f"❌ فشل تعيين اسم المستخدم: {e}\n"
+                                "تأكد من أن اسم المستخدم غير محجوز أو مخالف لسياسات تيليجرام.")
+        return
+
     # استقبال StringSession
     if len(text) > 50 and ' ' not in text and sender_id not in user_clients:
         try:
@@ -144,12 +183,11 @@ async def handle_session(event):
 async def clear_profile(client):
     try:
         await client(UpdateProfileRequest(
-            first_name=".",    # لا يمكن تركه فارغاً
+            first_name=".",  # لا يمكن ترك الاسم الأول فارغًا
             last_name="",
             about=""
         ))
-        # محاولة حذف اسم المستخدم (username) بدون تعيين بديل
-        await client(UpdateUsernameRequest(username=None))
+        await client(UpdateUsernameRequest(username=""))  # حذف اسم المستخدم القديم
         return True, "✅ تم مسح الاسم والنبذة وحذف اسم المستخدم (username) بنجاح."
     except Exception as e:
         return False, f"❌ حدث خطأ أثناء مسح البيانات: {e}"
