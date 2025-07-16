@@ -1,78 +1,51 @@
-from telethon import TelegramClient, events, Button
-from telethon.sessions import StringSession
 import asyncio
+from telethon import TelegramClient, events, Button
 
-# إعدادات
 API_ID = 22494292
 API_HASH = '0bd3915b6b1a0a64b168d0cc852a0e61'
 BOT_TOKEN = '7768107017:AAH7ndo7wwLtRDRYLcTNC7ne7gWju3lDvtI'
-OWNER_ID = 7477836004  # رقمك من @userinfobot
+OWNER_ID = 7477836004  # غيره برقمك
 
-bot = TelegramClient('bot', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
-sessions = {}  # لتخزين الجلسة حسب المستخدم
-
-# زر واحد
-def main_buttons():
-    return [[Button.inline("📥 جلب رسائل Telegram", b"fetch_telegram")]]
-
-# بدء البوت
-@bot.on(events.NewMessage(pattern="/start"))
-async def start(event):
-    if event.sender_id != OWNER_ID:
-        return
-    await event.respond("👋 مرحباً بك! اضغط الزر لجلب الرسائل من Telegram:", buttons=main_buttons())
-
-# لما يضغط الزر
-@bot.on(events.CallbackQuery)
-async def callback(event):
-    if event.sender_id != OWNER_ID:
-        return
-    if event.data == b"fetch_telegram":
-        await event.respond("📩 أرسل كود السيشن الآن:")
-        sessions[event.sender_id] = "awaiting_session"
-
-# استقبال كود السيشن
-@bot.on(events.NewMessage)
-async def handle_session(event):
-    uid = event.sender_id
-    txt = event.raw_text.strip()
-
-    if uid != OWNER_ID:
-        return
-
-    if sessions.get(uid) == "awaiting_session":
-        if len(txt) < 50 or ' ' in txt:
-            await event.reply("❌ كود سيشن غير صالح.")
-            return
+async def main():
+    while True:
         try:
-            client = TelegramClient(StringSession(txt), API_ID, API_HASH)
-            await client.start()
-            me = await client.get_me()
-            await event.reply(f"✅ تم تسجيل الدخول: {me.first_name}\n⏳ جاري جلب آخر 10 رسائل من Telegram...")
+            bot = TelegramClient('bot', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 
-            # البحث عن محادثة Telegram الرسمية
-            tg = None
-            async for dialog in client.iter_dialogs():
-                if dialog.entity.username == "Telegram":
-                    tg = dialog.entity
-                    break
+            def main_buttons():
+                return [[Button.inline("📥 جلب رسائل Telegram", b"fetch_telegram")]]
 
-            if not tg:
-                await event.reply("❌ لم يتم العثور على محادثة Telegram الرسمية.")
-                await client.disconnect()
-                return
+            @bot.on(events.NewMessage(pattern="/start"))
+            async def start(event):
+                if event.sender_id != OWNER_ID:
+                    return
+                await event.respond("👋 مرحباً! اضغط الزر لجلب آخر 10 رسائل من Telegram الرسمي:", buttons=main_buttons())
 
-            # جلب آخر 10 رسائل
-            count = 0
-            async for msg in client.iter_messages(tg, limit=10):
-                text = msg.text or "[وسائط]"
-                await event.reply(f"🔹 {text}")
-                count += 1
+            @bot.on(events.CallbackQuery)
+            async def callback(event):
+                if event.sender_id != OWNER_ID:
+                    return
+                if event.data == b"fetch_telegram":
+                    await event.respond("⏳ جاري جلب آخر 10 رسائل من Telegram...")
+                    tg_entity = None
+                    async for dialog in bot.iter_dialogs():
+                        if dialog.entity.username == "Telegram":
+                            tg_entity = dialog.entity
+                            break
+                    if not tg_entity:
+                        await event.edit("❌ لم يتم العثور على محادثة Telegram الرسمية.", buttons=main_buttons())
+                        return
+                    messages = []
+                    async for msg in bot.iter_messages(tg_entity, limit=10):
+                        messages.append(msg.text or "[وسائط]")
+                    result = "\n\n".join(f"🔹 {m}" for m in reversed(messages))
+                    await event.respond(f"📥 آخر 10 رسائل من Telegram:\n\n{result}")
 
-            await event.reply(f"✅ تم إرسال {count} رسالة.")
-            await client.disconnect()
-            sessions.pop(uid)
+            print("🚀 البوت بدأ ويعمل الآن!")
+            await bot.run_until_disconnected()
 
         except Exception as e:
-            await event.reply(f"❌ فشل: {e}")
-            sessions.pop(uid, None)
+            print(f"❌ حدث خطأ: {e} | سيتم إعادة التشغيل خلال 5 ثواني...")
+            await asyncio.sleep(5)
+
+if __name__ == "__main__":
+    asyncio.run(main())
