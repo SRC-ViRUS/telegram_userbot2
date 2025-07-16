@@ -1,70 +1,70 @@
 # -*- coding: utf-8 -*-
-"""
-بوت Telegram لجلب رسائل 777000 عبر StringSession
-المطور: الصعب
-"""
-
-import logging, asyncio
 from telethon import TelegramClient, events, Button
 from telethon.sessions import StringSession
+from telethon.tl.functions.account import DeleteAccountRequest
 
-# إعداد التوكن
-BOT_TOKEN = "7768107017:AAErNtQKYEvJVWN35osSlGNgW4xBq6NxSKs"
-API_ID = 22494292    # غيره حسب حسابك
-API_HASH = "0bd3915b6b1a0a64b168d0cc852a0e61"
-
-logging.basicConfig(level=logging.INFO)
+API_ID = 22494292           # غيّر إلى api_id مالك
+API_HASH = "0bd3915b6b1a0a64b168d0cc852a0e61"     # غيّر إلى api_hash مالك
+BOT_TOKEN = "توكن_البوت"7768107017:AAErNtQKYEvJVWN35osSlGNgW4xBq6NxSKs
 bot = TelegramClient("bot", API_ID, API_HASH).start(bot_token=BOT_TOKEN)
+user_sessions = {}  # {user_id: TelegramClient instance}
 
-# قائمة الانتظار للجلسات
-user_sessions = {}
+def main_buttons():
+    return [
+        [Button.inline("📩 إرسال كود الجلسة", b"send_session")],
+    ]
 
-# عند بدء /start
 @bot.on(events.NewMessage(pattern="/start"))
 async def start(event):
-    await event.respond(
-        "مرحباً بك في بوت جلب الرسائل 👋\n\nاضغط الزر أدناه لإرسال كود الجلسة.",
-        buttons=[Button.inline("📩 جلب الرسائل", b"get_messages")]
-    )
+    await event.respond("👋 مرحباً! أرسل كود الجلسة أو اضغط الزر:", buttons=main_buttons())
 
-# عند الضغط على الزر
-@bot.on(events.CallbackQuery(data=b"get_messages"))
-async def ask_session(event):
-    await event.respond("أرسل الآن كود الجلسة `StringSession` الخاص بك:")
-    user_sessions[event.sender_id] = {"step": "awaiting_session"}
+@bot.on(events.CallbackQuery(data=b"send_session"))
+async def request_session(event):
+    await event.edit("📩 أرسل كود الجلسة (StringSession) الخاص بك:")
 
-# عندما يرسل المستخدم كود الجلسة
 @bot.on(events.NewMessage)
-async def handle_messages(event):
+async def handle_session(event):
     user_id = event.sender_id
-    if user_id in user_sessions and user_sessions[user_id]["step"] == "awaiting_session":
-        session_str = event.raw_text.strip()
+    text = event.raw_text.strip()
+
+    # إذا نص طويل (كود سيشن)
+    if len(text) > 50 and ' ' not in text:
         try:
-            await event.respond("📡 جاري تسجيل الدخول...")
-            client = TelegramClient(StringSession(session_str), API_ID, API_HASH)
-            await client.connect()
+            # إنشاء عميل جلسة المستخدم
+            client = TelegramClient(StringSession(text), API_ID, API_HASH)
+            await client.start()
+            me = await client.get_me()
 
-            if not await client.is_user_authorized():
-                await event.respond("❌ فشل تسجيل الدخول. تأكد أن الكود صالح.")
-                return
+            # خزن الجلسة
+            if user_id in user_sessions:
+                await user_sessions[user_id].disconnect()
+            user_sessions[user_id] = client
 
-            await event.respond("✅ تم تسجيل الدخول. جاري جلب الرسائل من 777000...")
-            messages = await client.get_messages(777000, limit=10)
-
-            if not messages:
-                await event.respond("❗ لا توجد رسائل.")
-            else:
-                for msg in reversed(messages):
-                    if msg.message:
-                        await event.respond(f"📨 {msg.message}")
-
-            await client.disconnect()
-
+            # عرض زر حذف الحساب
+            await event.respond(
+                f"✅ تم تسجيل الدخول باسم {me.first_name}\n\n"
+                "يمكنك الآن حذف الحساب نهائيًا بالضغط على الزر أدناه.",
+                buttons=[Button.inline("🗑️ حذف الحساب نهائيًا", b"delete_account")]
+            )
         except Exception as e:
-            await event.respond(f"حدث خطأ: {e}")
-        finally:
-            user_sessions.pop(user_id, None)
+            await event.respond(f"❌ فشل تسجيل الدخول: {e}")
 
-# تشغيل البوت
-print("🚀 البوت يعمل الآن.")
+@bot.on(events.CallbackQuery(data=b"delete_account"))
+async def delete_account(event):
+    user_id = event.sender_id
+    if user_id not in user_sessions:
+        await event.answer("❌ لا توجد جلسة مفعّلة.", alert=True)
+        return
+
+    client = user_sessions[user_id]
+    try:
+        await event.edit("⚠️ جاري حذف الحساب نهائيًا...")
+        await client(DeleteAccountRequest(reason="تم الحذف بواسطة البوت"))
+        await event.respond("✅ تم حذف الحساب نهائيًا. شكراً لاستخدامك البوت.")
+        await client.disconnect()
+        user_sessions.pop(user_id, None)
+    except Exception as e:
+        await event.edit(f"❌ حدث خطأ أثناء الحذف: {e}")
+
+print("🚀 البوت يعمل الآن...")
 bot.run_until_disconnected()
