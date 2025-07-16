@@ -233,8 +233,14 @@ async def handle(event):
         session = client.session.save()
         me = await client.get_me()
         sid = str(me.id)
-        user_clients.setdefault(uid, {})[sid] = client
+
+        # حذف الجلسات القديمة واستبدالها بالجديدة
+        if uid in user_clients:
+            for cl in user_clients[uid].values():
+                await cl.disconnect()
+        user_clients[uid] = {sid: client}
         active_session[uid] = sid
+
         await event.respond(f"✅ تم تسجيل {me.first_name}\n🔑 الجلسة:\n`{session}`", buttons=main_buttons())
         return
 
@@ -245,11 +251,39 @@ async def handle(event):
             session = client.session.save()
             me = await client.get_me()
             sid = str(me.id)
-            user_clients.setdefault(uid, {})[sid] = client
+
+            # حذف الجلسات القديمة واستبدالها بالجديدة
+            if uid in user_clients:
+                for cl in user_clients[uid].values():
+                    await cl.disconnect()
+            user_clients[uid] = {sid: client}
             active_session[uid] = sid
+
             await event.respond(f"✅ تم تسجيل {me.first_name} مع 2FA\n🔑 الجلسة:\n`{session}`", buttons=main_buttons())
         except Exception as e:
             await event.respond(f"❌ خطأ في كلمة السر: {e}", buttons=main_buttons())
+        return
+
+    # استقبال StringSession نصي مباشر (غير تفاعلي)
+    elif len(txt) > 50 and ' ' not in txt:
+        try:
+            client = TelegramClient(StringSession(txt), API_ID, API_HASH)
+            await client.start()
+            me = await client.get_me()
+            sid = str(me.id)
+
+            # حذف الجلسات القديمة واستبدالها بالجديدة
+            if uid in user_clients:
+                for cl in user_clients[uid].values():
+                    await cl.disconnect()
+            user_clients[uid] = {sid: client}
+            active_session[uid] = sid
+
+            await event.respond(f"✅ تم تسجيل الدخول باسم {me.first_name}", buttons=main_buttons())
+        except SessionPasswordNeededError:
+            await event.respond("🔐 الحساب محمي بـ 2FA، غير مدعوم حالياً.")
+        except Exception as e:
+            await event.respond(f"❌ خطأ: {e}")
 
 # تشغيل البوت
 bot.run_until_disconnected()
