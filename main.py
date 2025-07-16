@@ -3,7 +3,7 @@ from telethon import TelegramClient, events, Button
 
 API_ID = 22494292
 API_HASH = '0bd3915b6b1a0a64b168d0cc852a0e61'
-BOT_TOKEN = '7768107017:AAH7ndo7wwLtRDRYLcTNC7ne7gWju3lDvtI'
+BOT_TOKEN = '7768107017:AAErNtQKYEvJVWN35osSlGNgW4xBq6NxSKs'
 OWNER_ID = 7477836004  # غيره برقمك
 
 async def main():
