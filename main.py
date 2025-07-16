@@ -5,7 +5,7 @@ import asyncio, re
 API_ID = 22494292
 API_HASH = '0bd3915b6b1a0a64b168d0cc852a0e61'
 BOT_TOKEN = '7768107017:AAH7ndo7wwLtRDRYLcTNC7ne7gWju3lDvtI'
-OWNER_ID = 123456789  # ضع معرفك الرقمي من @userinfobot
+OWNER_ID = 7477836004  # ضع معرفك الرقمي من @userinfobot
 
 bot = TelegramClient('bot', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 clients = {}  # {user_id: client}
