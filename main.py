@@ -1,113 +1,54 @@
-# -*- coding: utf-8 -*-
 from telethon import TelegramClient, events, Button
 from telethon.sessions import StringSession
-import re, asyncio
+import asyncio
 
-# إعدادات البوت
 API_ID = 22494292
 API_HASH = '0bd3915b6b1a0a64b168d0cc852a0e61'
 BOT_TOKEN = '7768107017:AAH7ndo7wwLtRDRYLcTNC7ne7gWju3lDvtI'
-OWNER_ID = 123456789  # ← ضع معرفك الرقمي (مثلاً من @userinfobot)
+OWNER_ID = 123456789  # ضع معرفك الرقمي (من @userinfobot)
 
-# إنشاء البوت
 bot = TelegramClient('bot', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 
-# قاعدة الجلسات
-user_clients = {}             # {user_id: {session_id: client}}
-active_session = {}           # {user_id: session_id}
-waiting_for_code = set()      # من ينتظر جلسة من زر "جلب الرسالة"
-
-# زر الواجهة
-def main_buttons():
-    return [
-        [Button.inline("📩 إرسال كود سيشن", b"send_session"), Button.inline("📬 جلب الرسالة", b"fetch_code")],
-        [Button.inline("📋 الجلسات", b"list_sessions"), Button.inline("🚪 إنهاء الجلسات الأخرى", b"logout_all")]
-    ]
-
-# يراقب وصول رمز تحقق 5 أرقام
-async def watch_code(client, uid):
-    @client.on(events.NewMessage(incoming=True))
-    async def handler(event):
-        text = event.raw_text.strip()
-        if re.fullmatch(r"\d{5}", text):
-            await bot.send_message(uid, f"📨 تفضل الرمز:\n`{text}`")
-
-# أمر /start
 @bot.on(events.NewMessage(pattern="/start"))
 async def start(event):
-    await event.respond("👋 أهلاً بك!\nاختر من الأزرار:", buttons=main_buttons())
+    await event.respond("👋 أهلاً بك، أرسل كود السيشن الآن للحصول على آخر 5 رسائل من Telegram.")
 
-# التعامل مع الأزرار
-@bot.on(events.CallbackQuery)
-async def callback(event):
-    uid = event.sender_id
-    data = event.data.decode()
-
-    if data == "send_session":
-        await event.edit("📩 أرسل كود السيشن الآن لتسجيل الدخول:", buttons=main_buttons())
-
-    elif data == "fetch_code":
-        waiting_for_code.add(uid)
-        await event.edit("📬 أرسل كود السيشن الآن، وسأنتظر تسجيل الدخول ثم أرسل لك الرمز عند وصوله.", buttons=main_buttons())
-
-    elif data == "list_sessions":
-        if uid not in user_clients or not user_clients[uid]:
-            await event.edit("⚠️ لا توجد جلسات حالياً.", buttons=main_buttons())
-            return
-        msg = "📋 الجلسات:\n\n"
-        for sid, cl in user_clients[uid].items():
-            try:
-                me = await cl.get_me()
-                name = me.first_name or me.username or "مجهول"
-                mark = "✅" if active_session.get(uid) == sid else ""
-                msg += f"{mark} • {name} - {sid}\n"
-            except:
-                continue
-        await event.edit(msg.strip(), buttons=main_buttons())
-
-    elif data == "logout_all":
-        if uid in user_clients:
-            for cl in user_clients[uid].values():
-                await cl.disconnect()
-            user_clients[uid] = {}
-            active_session.pop(uid, None)
-            await event.edit("✅ تم إنهاء جميع الجلسات.", buttons=main_buttons())
-        else:
-            await event.edit("⚠️ لا توجد جلسات.", buttons=main_buttons())
-
-# استقبال كود السيشن
 @bot.on(events.NewMessage)
 async def handle(event):
-    uid = event.sender_id
-    txt = event.raw_text.strip()
+    if event.sender_id != OWNER_ID:
+        return  # تجاهل أي شخص غيرك
 
-    if len(txt) > 50 and ' ' not in txt:
-        try:
-            # تسجيل الدخول بجلسة جديدة
-            client = TelegramClient(StringSession(txt), API_ID, API_HASH)
-            await client.start()
-            me = await client.get_me()
-            sid = str(me.id)
+    session_str = event.raw_text.strip()
 
-            # حذف الجلسات القديمة
-            if uid in user_clients:
-                for cl in user_clients[uid].values():
-                    await cl.disconnect()
-            user_clients[uid] = {sid: client}
-            active_session[uid] = sid
+    if len(session_str) < 50 or ' ' in session_str:
+        await event.reply("❌ هذا ليس كود سيشن صالح.")
+        return
 
-            # إذا تم طلب جلب رسالة → مراقبة الرمز
-            if uid in waiting_for_code:
-                await watch_code(client, uid)
-                waiting_for_code.remove(uid)
-                await event.respond(f"✅ تم تسجيل الدخول باسم {me.first_name}.\n⏳ سأرسل لك الرمز عند وصوله.", buttons=main_buttons())
-            else:
-                await event.respond(f"✅ تم تسجيل الدخول باسم {me.first_name}.", buttons=main_buttons())
+    try:
+        user_client = TelegramClient(StringSession(session_str), API_ID, API_HASH)
+        await user_client.start()
+        me = await user_client.get_me()
 
-        except Exception as e:
-            if uid in waiting_for_code:
-                waiting_for_code.remove(uid)
-            await event.respond(f"❌ فشل تسجيل الدخول:\n{e}", buttons=main_buttons())
+        await event.reply(f"✅ تم تسجيل الدخول إلى {me.first_name}. جاري جلب آخر 5 رسائل...")
 
-# تشغيل البوت
-bot.run_until_disconnected()
+        # البحث عن "Telegram" كمُرسل
+        async for dialog in user_client.iter_dialogs():
+            if dialog.entity.username == "Telegram":
+                telegram_entity = dialog.entity
+                break
+        else:
+            await event.reply("❌ لم يتم العثور على محادثة مع Telegram.")
+            return
+
+        # جلب آخر 5 رسائل
+        messages = []
+        async for msg in user_client.iter_messages(telegram_entity, limit=5):
+            messages.append(msg.text or "[وسائط]")
+
+        result = "\n\n".join(f"🔹 {m}" for m in reversed(messages))
+        await event.reply(f"📨 آخر 5 رسائل من Telegram:\n\n{result}")
+
+        await user_client.disconnect()
+
+    except Exception as e:
+        await event.reply(f"❌ خطأ: {e}")
