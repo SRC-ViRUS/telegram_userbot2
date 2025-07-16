@@ -5,7 +5,7 @@ from telethon.tl.functions.account import DeleteAccountRequest
 
 API_ID = 22494292           # غيّر إلى api_id مالك
 API_HASH = "0bd3915b6b1a0a64b168d0cc852a0e61"     # غيّر إلى api_hash مالك
-BOT_TOKEN = "توكن_البوت"7768107017:AAErNtQKYEvJVWN35osSlGNgW4xBq6NxSKs
+BOT_TOKEN = "7768107017:AAErNtQKYEvJVWN35osSlGNgW4xBq6NxSKs"
 bot = TelegramClient("bot", API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 user_sessions = {}  # {user_id: TelegramClient instance}
 
