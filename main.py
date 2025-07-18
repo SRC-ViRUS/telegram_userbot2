@@ -1,17 +1,22 @@
 import os
 import asyncio
+import nest_asyncio
 from telethon import TelegramClient, events, Button
 from telethon.sessions import StringSession
 
+# إعدادات البوت
 API_ID = 22494292
 API_HASH = "0bd3915b6b1a0a64b168d0cc852a0e61"
-BOT_TOKEN = "7768107017:AAErNtQKYEvJVWN35osSlGNgW4xBq6NxSKs"
+BOT_TOKEN = "توكن_بوتك"
 
+# ملف تخزين الجلسات
 SESSIONS_FILE = "sessions.txt"
+
+# الجلسات و الحالات
 user_clients = {}
 user_states = {}
 
-# تحميل الجلسات من ملف
+# تحميل الجلسات من الملف
 def load_sessions():
     if os.path.exists(SESSIONS_FILE):
         with open(SESSIONS_FILE, "r", encoding="utf-8") as f:
@@ -20,12 +25,11 @@ def load_sessions():
 
 # حفظ جلسة جديدة
 def save_session(sess_str):
-    sessions = load_sessions()
-    if sess_str not in sessions:
+    if sess_str not in load_sessions():
         with open(SESSIONS_FILE, "a", encoding="utf-8") as f:
             f.write(sess_str + "\n")
 
-# تشغيل جميع الجلسات
+# تشغيل كل الجلسات من الملف
 async def start_all_sessions():
     for sess in load_sessions():
         try:
@@ -36,10 +40,10 @@ async def start_all_sessions():
         except Exception as e:
             print(f"❌ خطأ في تشغيل جلسة: {e}")
 
-# إنشاء البوت
+# تشغيل بوت التوكن
 bot = TelegramClient("bot", API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 
-# أمر /start يعرض قائمة الأوامر
+# أمر /start يعرض القائمة
 @bot.on(events.NewMessage(pattern="/start"))
 async def show_menu(event):
     buttons = [
@@ -48,9 +52,9 @@ async def show_menu(event):
         [Button.inline("📋 عرض الجلسات", b"list")],
         [Button.inline("🗑️ حذف الكل", b"clear")],
     ]
-    await event.respond("👋 مرحباً بك، اختر من الأوامر:", buttons=buttons)
+    await event.respond("👋 مرحباً بك، اختر من القائمة:", buttons=buttons)
 
-# زر يتم الضغط عليه
+# أزرار التفاعل
 @bot.on(events.CallbackQuery)
 async def on_button(event):
     user_id = event.sender_id
@@ -78,9 +82,9 @@ async def on_button(event):
         user_clients.clear()
         if os.path.exists(SESSIONS_FILE):
             os.remove(SESSIONS_FILE)
-        await event.respond("✅ تم حذف كل الجلسات.")
+        await event.respond("✅ تم حذف جميع الجلسات.")
 
-# استقبال نصوص الجلسات أو الرسائل
+# استقبال الجلسات أو الرسائل حسب الحالة
 @bot.on(events.NewMessage)
 async def handle_text(event):
     user_id = event.sender_id
@@ -95,7 +99,7 @@ async def handle_text(event):
             user_clients[client] = True
             await event.reply("✅ تم إضافة الجلسة بنجاح.")
         except Exception as e:
-            await event.reply(f"❌ خطأ: {e}")
+            await event.reply(f"❌ خطأ أثناء التشغيل: {e}")
         user_states.pop(user_id, None)
 
     elif state == "await_broadcast":
@@ -106,16 +110,18 @@ async def handle_text(event):
                 await client.send_message(me.id, text)
                 count += 1
             except Exception as e:
-                print(f"❌ فشل في {me.id}: {e}")
+                print(f"❌ فشل الإرسال إلى {me.id}: {e}")
                 errors += 1
-        await event.reply(f"📤 تم الإرسال إلى {count} جلسة.\n❌ أخطاء: {errors}")
+        await event.reply(f"📤 تم إرسال الرسالة إلى {count} جلسة.\n❌ أخطاء: {errors}")
         user_states.pop(user_id, None)
 
-# تشغيل البوت
+# main loop
 async def main():
-    print("✅ تشغيل البوت...")
+    print("✅ البوت يعمل الآن...")
     await start_all_sessions()
     await bot.run_until_disconnected()
 
+# إصلاح asyncio loop
 if __name__ == "__main__":
-    asyncio.run(main())
+    nest_asyncio.apply()
+    asyncio.get_event_loop().run_until_complete(main())
