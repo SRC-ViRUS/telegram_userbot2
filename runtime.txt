@@ -1,1 +1,2 @@
+pip install nest_asyncio
 telethon
