@@ -1,2 +1,2 @@
-telethon==1.40.0
-yt-dlp
+aiogram==2.25.2
+aiohttp
