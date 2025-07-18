@@ -1,2 +1,1 @@
-pip install nest_asyncio
-telethon
+python-3.11.0
