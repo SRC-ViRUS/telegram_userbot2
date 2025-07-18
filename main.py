@@ -54,6 +54,7 @@ async def delete_message_later(event, delay=3):
     except:
         pass
 
+# عرض القائمة مع أزرار
 @bot.on(events.NewMessage(pattern=r"^/menu$"))
 async def menu_handler(event):
     buttons = [
@@ -71,7 +72,7 @@ async def callback_handler(event):
     data = event.data.decode("utf-8")
 
     if data == "add_session":
-        await event.edit("أرسل لي الـ Session String الآن (بصيغة StringSession).")
+        await event.edit("📥 أرسل لي الـ StringSession الخاص بالحساب.")
         @bot.on(events.NewMessage(from_users=event.sender_id))
         async def get_session(event2):
             session_str = event2.raw_text.strip()
@@ -86,7 +87,7 @@ async def callback_handler(event):
         await event.delete()
 
     elif data == "send_all":
-        await event.edit("أرسل لي نص الرسالة التي تريد إرسالها لجميع الحسابات.")
+        await event.edit("✉️ أرسل لي نص الرسالة التي تريد إرسالها لجميع الحسابات.")
         @bot.on(events.NewMessage(from_users=event.sender_id))
         async def get_text(event2):
             text = event2.raw_text.strip()
@@ -126,5 +127,4 @@ async def main():
     await bot.run_until_disconnected()
 
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(main())
+    asyncio.run(main())
