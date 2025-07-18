@@ -7,7 +7,7 @@ from telethon.sessions import StringSession
 # إعدادات البوت
 API_ID = 22494292
 API_HASH = "0bd3915b6b1a0a64b168d0cc852a0e61"
-BOT_TOKEN = "توكن_بوتك"
+BOT_TOKEN = "7768107017:AAErNtQKYEvJVWN35osSlGNgW4xBq6NxSKs"
 
 # ملف تخزين الجلسات
 SESSIONS_FILE = "sessions.txt"
