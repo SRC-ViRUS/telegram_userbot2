@@ -16,7 +16,6 @@
 1. اربط حسابك GitHub مع Railway
 2. أنشئ مشروع جديد واربطه بهذا المستودع
 3. في Settings > Variables أضف:
-   - `API_ID`
-   - `API_HASH`
-   - `BOT_TOKEN`
+   - `BOT_TOKEN`: Your bot token from @BotFather.
+   - `OWNER_ID`: Your Telegram user ID.
 4. في Settings > Deploy حدد:

@@ -1,19 +1,31 @@
 import json
 import re
 import aiohttp
+import os
 from aiogram import Bot, Dispatcher, types
+from aiogram.contrib.fsm_storage.memory import MemoryStorage
+from aiogram.dispatcher import FSMContext
+from aiogram.dispatcher.filters.state import State, StatesGroup
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils import executor
 
-# ✅ توكن البوت (مباشرة)
-BOT_TOKEN = "7768107017:AAErNtQKYEvJVWN35osSlGNgW4xBq6NxSKs"
-OWNER_ID = 7477836004  # معرف مالك البوت
+# ✅ توكن البوت (من متغيرات البيئة)
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+OWNER_ID = int(os.environ.get("OWNER_ID"))  # معرف مالك البوت
 
+if not BOT_TOKEN:
+    raise ValueError("No BOT_TOKEN found in environment variables")
+
+storage = MemoryStorage()
 bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher(bot)
+dp = Dispatcher(bot, storage=storage)
 CHANNELS_FILE = "channels.json"
 USERS_FILE = "users.json"
 CACHE = {}  # لتخزين مؤقت للفيديوهات والصور
+
+class Form(StatesGroup):
+    add_channel = State()
+    broadcast = State()
 
 # ======= إدارة القنوات (القائمة) =======
 def load_channels():
@@ -111,11 +123,46 @@ async def download_facebook(url):
             return video_url
 
 async def download_instagram(url):
-    # مثال مبسط: ممكن تستخدم API أو scraping خارجي لاحقًا
-    raise NotImplementedError("Instagram download not implemented yet")
+    if url in CACHE:
+        return CACHE[url]
+
+    async with aiohttp.ClientSession() as session:
+        api_url = f"https://api.instagram.com/oembed?url={url}"
+        async with session.get(api_url) as resp:
+            if resp.status != 200:
+                raise Exception("فشل الحصول على معلومات الفيديو من Instagram")
+            data = await resp.json()
+            video_url = data.get('thumbnail_url')
+            if not video_url:
+                raise Exception("فشل الحصول على رابط الفيديو")
+
+            # The oembed endpoint returns a thumbnail, let's try to get the video from a different source
+            api_url = f"https://api.threadsphotodownloader.com/v2/media?url={url}"
+            async with session.get(api_url) as resp:
+                if resp.status != 200:
+                    raise Exception("فشل الحصول على الفيديو")
+                data = await resp.json()
+                video_url = data['data']['videos'][0]['url']
+
+
+            CACHE[url] = video_url
+            return video_url
 
 async def download_youtube(url):
-    raise NotImplementedError("YouTube download not implemented yet")
+    if url in CACHE:
+        return CACHE[url]
+
+    async with aiohttp.ClientSession() as session:
+        api_url = f"https://loader.to/ajax/download.php?format=720&url={url}"
+        async with session.get(api_url) as resp:
+            if resp.status != 200:
+                raise Exception("فشل الحصول على معلومات الفيديو من YouTube")
+            data = await resp.json()
+            download_url = data.get('download_url')
+            if not download_url:
+                raise Exception("فشل الحصول على رابط الفيديو")
+            CACHE[url] = download_url
+            return download_url
 
 async def download_twitter(url):
     raise NotImplementedError("Twitter download not implemented yet")
@@ -177,9 +224,11 @@ async def handle_link(message: types.Message):
             video_url = await download_facebook(url)
             await message.reply_video(video_url)
         elif platform == "instagram":
-            await message.reply("⚠️ تحميل إنستغرام غير مفعل حاليًا.")
+            video_url = await download_instagram(url)
+            await message.reply_video(video_url)
         elif platform == "youtube":
-            await message.reply("⚠️ تحميل يوتيوب غير مفعل حاليًا.")
+            video_url = await download_youtube(url)
+            await message.reply_video(video_url)
         elif platform == "twitter":
             await message.reply("⚠️ تحميل تويتر غير مفعل حاليًا.")
     except Exception as e:
@@ -224,21 +273,21 @@ async def add_channel_start(call: types.CallbackQuery):
         await call.answer("🚫 ممنوع", show_alert=True)
         return
     await call.message.edit_text("📥 أرسل معرف القناة التي تريد إضافتها (مثلاً: @channelusername)")
+    await Form.add_channel.set()
 
-    @dp.message_handler()
-    async def receive_channel(message: types.Message):
-        if message.from_user.id != OWNER_ID:
-            return
-        ch = message.text.strip()
-        channels = load_channels()
-        if ch not in channels:
-            channels.append(ch)
-            save_channels(channels)
-            await message.reply(f"✅ تم إضافة القناة: {ch}")
-        else:
-            await message.reply("⚠️ القناة موجودة بالفعل.")
-        # إزالة المعالج المؤقت
-        dp.message_handlers.unregister(receive_channel)
+@dp.message_handler(state=Form.add_channel)
+async def process_add_channel(message: types.Message, state: FSMContext):
+    if message.from_user.id != OWNER_ID:
+        return
+    ch = message.text.strip()
+    channels = load_channels()
+    if ch not in channels:
+        channels.append(ch)
+        save_channels(channels)
+        await message.reply(f"✅ تم إضافة القناة: {ch}")
+    else:
+        await message.reply("⚠️ القناة موجودة بالفعل.")
+    await state.finish()
 
 @dp.callback_query_handler(lambda c: c.data == "remove_channel")
 async def remove_channel_start(call: types.CallbackQuery):
@@ -292,21 +341,22 @@ async def broadcast_start(call: types.CallbackQuery):
         await call.answer("🚫 ممنوع", show_alert=True)
         return
     await call.message.edit_text("📢 أرسل الرسالة التي تريد نشرها:")
+    await Form.broadcast.set()
 
-    @dp.message_handler()
-    async def receive_broadcast(message: types.Message):
-        if message.from_user.id != OWNER_ID:
-            return
-        users = load_users()
-        count = 0
-        for user_id in users:
-            try:
-                await bot.send_message(int(user_id), message.text)
-                count += 1
-            except:
-                pass
-        await message.reply(f"✅ تم إرسال الرسالة لـ {count} مستخدمًا.")
-        dp.message_handlers.unregister(receive_broadcast)
+@dp.message_handler(state=Form.broadcast)
+async def process_broadcast(message: types.Message, state: FSMContext):
+    if message.from_user.id != OWNER_ID:
+        return
+    users = load_users()
+    count = 0
+    for user_id in users:
+        try:
+            await bot.send_message(int(user_id), message.text)
+            count += 1
+        except:
+            pass
+    await message.reply(f"✅ تم إرسال الرسالة لـ {count} مستخدمًا.")
+    await state.finish()
 
 # ========== تشغيل البوت ==========
 if __name__ == "__main__":
