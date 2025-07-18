@@ -2,23 +2,32 @@ import json
 import re
 import aiohttp
 import os
-from aiogram import Bot, Dispatcher, types
-from aiogram.contrib.fsm_storage.memory import MemoryStorage
-from aiogram.dispatcher import FSMContext
-from aiogram.dispatcher.filters.state import State, StatesGroup
+import asyncio
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.utils import executor
+from loguru import logger
 
 # ✅ توكن البوت (من متغيرات البيئة)
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-OWNER_ID = int(os.environ.get("OWNER_ID"))  # معرف مالك البوت
+OWNER_ID_STR = os.environ.get("OWNER_ID")
 
 if not BOT_TOKEN:
-    raise ValueError("No BOT_TOKEN found in environment variables")
+    raise ValueError("BOT_TOKEN environment variable not set.")
+
+if not OWNER_ID_STR:
+    raise ValueError("OWNER_ID environment variable not set.")
+
+try:
+    OWNER_ID = int(OWNER_ID_STR)
+except ValueError:
+    raise ValueError("OWNER_ID environment variable must be an integer.")
 
 storage = MemoryStorage()
 bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher(bot, storage=storage)
+dp = Dispatcher(storage=storage)
 CHANNELS_FILE = "channels.json"
 USERS_FILE = "users.json"
 CACHE = {}  # لتخزين مؤقت للفيديوهات والصور
@@ -33,7 +42,7 @@ def load_channels():
         with open(CHANNELS_FILE, "r") as f:
             data = json.load(f)
             return data.get("channels", [])
-    except:
+    except FileNotFoundError:
         return []
 
 def save_channels(channels):
@@ -45,7 +54,7 @@ def load_users():
     try:
         with open(USERS_FILE, "r") as f:
             return json.load(f)
-    except:
+    except FileNotFoundError:
         return {}
 
 def save_users(users):
@@ -74,7 +83,8 @@ async def is_subscribed(user_id):
             member = await bot.get_chat_member(channel, user_id)
             if member.status in ["left", "kicked"]:
                 return False
-        except:
+        except Exception as e:
+            logger.error(f"Error checking subscription for user {user_id} in channel {channel}: {e}")
             return False
     return True if channels else True  # إذا ماكو قنوات تعتبر مشترك
 
@@ -90,18 +100,19 @@ def subscription_keyboard():
 # ======= دوال تنزيل الفيديو =======
 
 async def download_tiktok(url, quality="hd"):
-    # لو الفيديو محجوز بالكاش يرجع مباشر
     if url in CACHE:
         return CACHE[url]
 
     async with aiohttp.ClientSession() as session:
         api_url = f"https://api.tikmate.app/api/convert?url={url}"
         async with session.get(api_url) as resp:
+            if resp.status != 200:
+                raise Exception(f"TikMate API returned status code {resp.status}")
             data = await resp.json()
             token = data.get('token')
             vid_id = data.get('id')
             if not token or not vid_id:
-                raise Exception("فشل الحصول على رابط الفيديو")
+                raise Exception("فشل الحصول على رابط الفيديو من TikMate")
             video_url = f"https://tikmate.app/download/{token}/{vid_id}.mp4"
             CACHE[url] = video_url
             return video_url
@@ -115,9 +126,11 @@ async def download_facebook(url):
         payload = {"q": url}
         headers = {"content-type": "application/x-www-form-urlencoded"}
         async with session.post(api_url, data=payload, headers=headers) as resp:
+            if resp.status != 200:
+                raise Exception(f"FBDownloader API returned status code {resp.status}")
             data = await resp.json()
             if 'links' not in data or not data['links']:
-                raise Exception("فشل الحصول على رابط الفيديو")
+                raise Exception("فشل الحصول على رابط الفيديو من FBDownloader")
             video_url = data['links'][0]['url']
             CACHE[url] = video_url
             return video_url
@@ -127,24 +140,14 @@ async def download_instagram(url):
         return CACHE[url]
 
     async with aiohttp.ClientSession() as session:
-        api_url = f"https://api.instagram.com/oembed?url={url}"
+        api_url = f"https://api.threadsphotodownloader.com/v2/media?url={url}"
         async with session.get(api_url) as resp:
             if resp.status != 200:
-                raise Exception("فشل الحصول على معلومات الفيديو من Instagram")
+                raise Exception("فشل الحصول على الفيديو")
             data = await resp.json()
-            video_url = data.get('thumbnail_url')
-            if not video_url:
-                raise Exception("فشل الحصول على رابط الفيديو")
-
-            # The oembed endpoint returns a thumbnail, let's try to get the video from a different source
-            api_url = f"https://api.threadsphotodownloader.com/v2/media?url={url}"
-            async with session.get(api_url) as resp:
-                if resp.status != 200:
-                    raise Exception("فشل الحصول على الفيديو")
-                data = await resp.json()
-                video_url = data['data']['videos'][0]['url']
-
-
+            if not data.get('data') or not data['data'].get('videos'):
+                raise Exception("فشل الحصول على رابط الفيديو من Instagram")
+            video_url = data['data']['videos'][0]['url']
             CACHE[url] = video_url
             return video_url
 
@@ -165,7 +168,21 @@ async def download_youtube(url):
             return download_url
 
 async def download_twitter(url):
-    raise NotImplementedError("Twitter download not implemented yet")
+    if url in CACHE:
+        return CACHE[url]
+
+    async with aiohttp.ClientSession() as session:
+        api_url = f"https://api.vxtwitter.com/Twitter/Status/{url.split('/')[-1]}"
+        async with session.get(api_url) as resp:
+            if resp.status != 200:
+                raise Exception("فشل الحصول على الفيديو من Twitter")
+            data = await resp.json()
+            video_url = data.get('media_extended', [{}])[0].get('url')
+            if not video_url:
+                raise Exception("فشل الحصول على رابط الفيديو من Twitter")
+            CACHE[url] = video_url
+            return video_url
+
 
 # ======= كشف نوع الرابط =======
 def detect_platform(url: str):
@@ -185,7 +202,7 @@ def detect_platform(url: str):
 
 # ======= التعامل مع الرسائل =======
 
-@dp.message_handler(commands=["start"])
+@dp.message(F.text.startswith("/start"))
 async def cmd_start(message: types.Message):
     add_user(message.from_user.id)
     if await is_subscribed(message.from_user.id):
@@ -193,14 +210,14 @@ async def cmd_start(message: types.Message):
     else:
         await message.reply("🚫 يجب الاشتراك في القنوات التالية أولاً:", reply_markup=subscription_keyboard())
 
-@dp.callback_query_handler(lambda c: c.data == "check_sub")
+@dp.callback_query(F.data == "check_sub")
 async def callback_check_sub(call: types.CallbackQuery):
     if await is_subscribed(call.from_user.id):
         await call.message.edit_text("✅ أنت مشترك في كل القنوات، الآن يمكنك استخدام البوت.")
     else:
         await call.answer("❌ ما زلت غير مشترك في جميع القنوات.", show_alert=True)
 
-@dp.message_handler(lambda m: re.match(r'https?://', m.text or ""))
+@dp.message(F.text.regexp(r'https?://'))
 async def handle_link(message: types.Message):
     add_user(message.from_user.id)
     if not await is_subscribed(message.from_user.id):
@@ -230,8 +247,11 @@ async def handle_link(message: types.Message):
             video_url = await download_youtube(url)
             await message.reply_video(video_url)
         elif platform == "twitter":
-            await message.reply("⚠️ تحميل تويتر غير مفعل حاليًا.")
+            video_url = await download_twitter(url)
+            await message.reply_video(video_url)
+        increment_download(message.from_user.id)
     except Exception as e:
+        logger.error(f"Error downloading video from {platform} for user {message.from_user.id}: {e}")
         await message.reply(f"❌ فشل التنزيل: {str(e)}")
 
 # ======= لوحة تحكم المالك =======
@@ -246,14 +266,14 @@ def owner_keyboard():
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-@dp.message_handler(commands=["admin"])
+@dp.message(F.text.startswith("/admin"))
 async def cmd_admin(message: types.Message):
     if message.from_user.id != OWNER_ID:
         await message.reply("🚫 أنت لست مالك البوت.")
         return
     await message.reply("مرحبًا بك في لوحة التحكم:", reply_markup=owner_keyboard())
 
-@dp.callback_query_handler(lambda c: c.data == "show_channels")
+@dp.callback_query(F.data == "show_channels")
 async def show_channels(call: types.CallbackQuery):
     if call.from_user.id != OWNER_ID:
         await call.answer("🚫 ممنوع", show_alert=True)
@@ -267,15 +287,15 @@ async def show_channels(call: types.CallbackQuery):
             text += f"{ch}\n"
     await call.message.edit_text(text, reply_markup=owner_keyboard())
 
-@dp.callback_query_handler(lambda c: c.data == "add_channel")
-async def add_channel_start(call: types.CallbackQuery):
+@dp.callback_query(F.data == "add_channel")
+async def add_channel_start(call: types.CallbackQuery, state: FSMContext):
     if call.from_user.id != OWNER_ID:
         await call.answer("🚫 ممنوع", show_alert=True)
         return
     await call.message.edit_text("📥 أرسل معرف القناة التي تريد إضافتها (مثلاً: @channelusername)")
-    await Form.add_channel.set()
+    await state.set_state(Form.add_channel)
 
-@dp.message_handler(state=Form.add_channel)
+@dp.message(Form.add_channel)
 async def process_add_channel(message: types.Message, state: FSMContext):
     if message.from_user.id != OWNER_ID:
         return
@@ -287,9 +307,9 @@ async def process_add_channel(message: types.Message, state: FSMContext):
         await message.reply(f"✅ تم إضافة القناة: {ch}")
     else:
         await message.reply("⚠️ القناة موجودة بالفعل.")
-    await state.finish()
+    await state.clear()
 
-@dp.callback_query_handler(lambda c: c.data == "remove_channel")
+@dp.callback_query(F.data == "remove_channel")
 async def remove_channel_start(call: types.CallbackQuery):
     if call.from_user.id != OWNER_ID:
         await call.answer("🚫 ممنوع", show_alert=True)
@@ -306,7 +326,7 @@ async def remove_channel_start(call: types.CallbackQuery):
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     await call.message.edit_text("❌ اختر قناة للحذف:", reply_markup=keyboard)
 
-@dp.callback_query_handler(lambda c: c.data and c.data.startswith("del_"))
+@dp.callback_query(F.data.startswith("del_"))
 async def delete_channel(call: types.CallbackQuery):
     if call.from_user.id != OWNER_ID:
         await call.answer("🚫 ممنوع", show_alert=True)
@@ -320,14 +340,14 @@ async def delete_channel(call: types.CallbackQuery):
     else:
         await call.answer("⚠️ القناة غير موجودة.", show_alert=True)
 
-@dp.callback_query_handler(lambda c: c.data == "admin_back")
+@dp.callback_query(F.data == "admin_back")
 async def admin_back(call: types.CallbackQuery):
     if call.from_user.id != OWNER_ID:
         await call.answer("🚫 ممنوع", show_alert=True)
         return
     await call.message.edit_text("مرحبًا بك في لوحة التحكم:", reply_markup=owner_keyboard())
 
-@dp.callback_query_handler(lambda c: c.data == "user_count")
+@dp.callback_query(F.data == "user_count")
 async def user_count(call: types.CallbackQuery):
     if call.from_user.id != OWNER_ID:
         await call.answer("🚫 ممنوع", show_alert=True)
@@ -335,15 +355,15 @@ async def user_count(call: types.CallbackQuery):
     users = load_users()
     await call.message.edit_text(f"👥 عدد المستخدمين المسجلين: {len(users)}", reply_markup=owner_keyboard())
 
-@dp.callback_query_handler(lambda c: c.data == "broadcast")
-async def broadcast_start(call: types.CallbackQuery):
+@dp.callback_query(F.data == "broadcast")
+async def broadcast_start(call: types.CallbackQuery, state: FSMContext):
     if call.from_user.id != OWNER_ID:
         await call.answer("🚫 ممنوع", show_alert=True)
         return
     await call.message.edit_text("📢 أرسل الرسالة التي تريد نشرها:")
-    await Form.broadcast.set()
+    await state.set_state(Form.broadcast)
 
-@dp.message_handler(state=Form.broadcast)
+@dp.message(Form.broadcast)
 async def process_broadcast(message: types.Message, state: FSMContext):
     if message.from_user.id != OWNER_ID:
         return
@@ -353,12 +373,16 @@ async def process_broadcast(message: types.Message, state: FSMContext):
         try:
             await bot.send_message(int(user_id), message.text)
             count += 1
-        except:
-            pass
+        except Exception as e:
+            logger.error(f"Error sending broadcast message to user {user_id}: {e}")
     await message.reply(f"✅ تم إرسال الرسالة لـ {count} مستخدمًا.")
-    await state.finish()
+    await state.clear()
 
 # ========== تشغيل البوت ==========
+async def main():
+    logger.add("bot.log", rotation="10 MB")
+    logger.info("Bot is starting...")
+    await dp.start_polling(bot)
+
 if __name__ == "__main__":
-    print("🚀 Bot is running...")
-    executor.start_polling(dp)
+    asyncio.run(main())
