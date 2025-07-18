@@ -1,129 +1,120 @@
-import asyncio
 import os
+import asyncio
 from telethon import TelegramClient, events, Button
 from telethon.sessions import StringSession
 
-BOT_TOKEN = "7768107017:AAErNtQKYEvJVWN35osSlGNgW4xBq6NxSKs"
 API_ID = 22494292
 API_HASH = "0bd3915b6b1a0a64b168d0cc852a0e61"
+BOT_TOKEN = "7768107017:AAErNtQKYEvJVWN35osSlGNgW4xBq6NxSKs"
 
 SESSIONS_FILE = "sessions.txt"
+user_clients = {}
+user_states = {}
 
+# تحميل الجلسات من ملف
 def load_sessions():
-    sessions = []
     if os.path.exists(SESSIONS_FILE):
         with open(SESSIONS_FILE, "r", encoding="utf-8") as f:
-            sessions = [line.strip() for line in f if line.strip()]
-    return sessions
+            return [line.strip() for line in f if line.strip()]
+    return []
 
-def save_session(session_str):
-    with open(SESSIONS_FILE, "a", encoding="utf-8") as f:
-        f.write(session_str + "\n")
-
-user_clients = {}
-
-bot = TelegramClient('bot', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
-
-async def start_all_sessions():
+# حفظ جلسة جديدة
+def save_session(sess_str):
     sessions = load_sessions()
-    for i, sess in enumerate(sessions, 1):
-        client = TelegramClient(StringSession(sess), API_ID, API_HASH)
-        await client.start()
-        user_clients[client] = True
-        print(f"تم تشغيل جلسة رقم {i}")
+    if sess_str not in sessions:
+        with open(SESSIONS_FILE, "a", encoding="utf-8") as f:
+            f.write(sess_str + "\n")
 
-async def send_message_all(text, event):
-    count = 0
-    errors = 0
-    for client in list(user_clients.keys()):
+# تشغيل جميع الجلسات
+async def start_all_sessions():
+    for sess in load_sessions():
         try:
-            me = await client.get_me()
-            await client.send_message(me.id, text)
-            count += 1
-        except Exception as e:
-            errors += 1
-            print(f"خطأ في حساب {me.id}: {e}")
-    await event.edit(f"تم إرسال الرسالة إلى {count} حساب.\nالأخطاء: {errors}")
-    await asyncio.sleep(3)
-    await event.delete()
-
-async def delete_message_later(event, delay=3):
-    await asyncio.sleep(delay)
-    try:
-        await event.delete()
-    except:
-        pass
-
-# عرض القائمة مع أزرار
-@bot.on(events.NewMessage(pattern=r"^/menu$"))
-async def menu_handler(event):
-    buttons = [
-        [Button.inline("➕ إضافة جلسة", b"add_session")],
-        [Button.inline("📤 إرسال رسالة للجميع", b"send_all")],
-        [Button.inline("🗑️ مسح جميع الجلسات", b"clear_sessions")],
-        [Button.inline("📋 عرض الجلسات", b"list_sessions")],
-    ]
-    await event.respond("اختر أمر من القائمة:", buttons=buttons)
-    await asyncio.sleep(30)
-    await event.delete()
-
-@bot.on(events.CallbackQuery)
-async def callback_handler(event):
-    data = event.data.decode("utf-8")
-
-    if data == "add_session":
-        await event.edit("📥 أرسل لي الـ StringSession الخاص بالحساب.")
-        @bot.on(events.NewMessage(from_users=event.sender_id))
-        async def get_session(event2):
-            session_str = event2.raw_text.strip()
-            save_session(session_str)
-            client = TelegramClient(StringSession(session_str), API_ID, API_HASH)
+            client = TelegramClient(StringSession(sess), API_ID, API_HASH)
             await client.start()
             user_clients[client] = True
-            await event2.reply("✅ تم إضافة وتشغيل الجلسة الجديدة.")
-            await asyncio.sleep(3)
-            await event2.delete()
-            bot.remove_event_handler(get_session)
-        await event.delete()
+            print("✅ جلسة شغالة")
+        except Exception as e:
+            print(f"❌ خطأ في تشغيل جلسة: {e}")
 
-    elif data == "send_all":
-        await event.edit("✉️ أرسل لي نص الرسالة التي تريد إرسالها لجميع الحسابات.")
-        @bot.on(events.NewMessage(from_users=event.sender_id))
-        async def get_text(event2):
-            text = event2.raw_text.strip()
-            if not text:
-                await event2.reply("❌ النص فارغ. حاول مرة أخرى.")
-                await asyncio.sleep(3)
-                await event2.delete()
-                return
-            await send_message_all(text, event2)
-            bot.remove_event_handler(get_text)
-        await event.delete()
+# إنشاء البوت
+bot = TelegramClient("bot", API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 
-    elif data == "clear_sessions":
+# أمر /start يعرض قائمة الأوامر
+@bot.on(events.NewMessage(pattern="/start"))
+async def show_menu(event):
+    buttons = [
+        [Button.inline("➕ إضافة جلسة", b"add")],
+        [Button.inline("📤 إرسال رسالة", b"send")],
+        [Button.inline("📋 عرض الجلسات", b"list")],
+        [Button.inline("🗑️ حذف الكل", b"clear")],
+    ]
+    await event.respond("👋 مرحباً بك، اختر من الأوامر:", buttons=buttons)
+
+# زر يتم الضغط عليه
+@bot.on(events.CallbackQuery)
+async def on_button(event):
+    user_id = event.sender_id
+    data = event.data.decode()
+
+    if data == "add":
+        user_states[user_id] = "await_session"
+        await event.respond("📥 أرسل StringSession الآن.")
+    
+    elif data == "send":
+        user_states[user_id] = "await_broadcast"
+        await event.respond("✉️ أرسل نص الرسالة الآن.")
+    
+    elif data == "list":
+        sessions = load_sessions()
+        if not sessions:
+            await event.respond("⚠️ لا توجد جلسات حالياً.")
+        else:
+            msg = "📋 الجلسات:\n"
+            for i, s in enumerate(sessions, 1):
+                msg += f"{i}. {s[:20]}...\n"
+            await event.respond(msg)
+    
+    elif data == "clear":
         user_clients.clear()
         if os.path.exists(SESSIONS_FILE):
             os.remove(SESSIONS_FILE)
-        await event.edit("✅ تم حذف جميع الجلسات.")
-        await asyncio.sleep(3)
-        await event.delete()
+        await event.respond("✅ تم حذف كل الجلسات.")
 
-    elif data == "list_sessions":
-        sessions = load_sessions()
-        if not sessions:
-            await event.edit("⚠️ لا توجد جلسات حالياً.")
-        else:
-            msg = "📋 قائمة الجلسات:\n"
-            for i, sess in enumerate(sessions, 1):
-                msg += f"{i}. {sess[:20]}... (مخفف)\n"
-            await event.edit(msg)
-        await asyncio.sleep(10)
-        await event.delete()
+# استقبال نصوص الجلسات أو الرسائل
+@bot.on(events.NewMessage)
+async def handle_text(event):
+    user_id = event.sender_id
+    state = user_states.get(user_id)
+    text = event.raw_text.strip()
 
+    if state == "await_session":
+        try:
+            save_session(text)
+            client = TelegramClient(StringSession(text), API_ID, API_HASH)
+            await client.start()
+            user_clients[client] = True
+            await event.reply("✅ تم إضافة الجلسة بنجاح.")
+        except Exception as e:
+            await event.reply(f"❌ خطأ: {e}")
+        user_states.pop(user_id, None)
+
+    elif state == "await_broadcast":
+        count, errors = 0, 0
+        for client in list(user_clients.keys()):
+            try:
+                me = await client.get_me()
+                await client.send_message(me.id, text)
+                count += 1
+            except Exception as e:
+                print(f"❌ فشل في {me.id}: {e}")
+                errors += 1
+        await event.reply(f"📤 تم الإرسال إلى {count} جلسة.\n❌ أخطاء: {errors}")
+        user_states.pop(user_id, None)
+
+# تشغيل البوت
 async def main():
-    print("تشغيل البوت...")
+    print("✅ تشغيل البوت...")
     await start_all_sessions()
-    print("تم تشغيل جميع الجلسات.")
     await bot.run_until_disconnected()
 
 if __name__ == "__main__":
