@@ -1,149 +1,315 @@
 import os
-import asyncio
-import nest_asyncio
-import tempfile
-from telethon import TelegramClient, events, Button
-from telethon.sessions import StringSession
+import json
+import re
+import aiohttp
+from aiogram import Bot, Dispatcher, types
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.utils import executor
 
-nest_asyncio.apply()  # لتفادي مشكلة تغيير حلقة الحدث asyncio
+BOT_TOKEN = os.getenv("7768107017:AAErNtQKYEvJVWN35osSlGNgW4xBq6NxSKs")
+OWNER_ID = 7477836004  # معرف مالك البوت
 
-API_ID = 22494292  # ضع هنا API_ID
-API_HASH = "0bd3915b6b1a0a64b168d0cc852a0e61"  # ضع هنا API_HASH
-BOT_TOKEN = "7768107017:AAErNtQKYEvJVWN35osSlGNgW4xBq6NxSKs"  # ضع هنا توكن البوت
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher(bot)
 
-os.makedirs("sessions", exist_ok=True)
-os.makedirs("media", exist_ok=True)
+CHANNELS_FILE = "channels.json"
+USERS_FILE = "users.json"
+CACHE = {}  # لتخزين مؤقت للفيديوهات والصور
 
-bot = TelegramClient("bot", API_ID, API_HASH).start(bot_token=BOT_TOKEN)
+# ======= إدارة القنوات (القائمة) =======
+def load_channels():
+    try:
+        with open(CHANNELS_FILE, "r") as f:
+            data = json.load(f)
+            return data.get("channels", [])
+    except:
+        return []
 
-user_clients = {}
+def save_channels(channels):
+    with open(CHANNELS_FILE, "w") as f:
+        json.dump({"channels": channels}, f, indent=4)
 
-async def load_sessions():
-    for filename in os.listdir("sessions"):
-        if filename.endswith(".session"):
-            path = f"sessions/{filename}"
-            client = TelegramClient(path, API_ID, API_HASH)
-            await client.start()
-            user_clients[client] = True
-            print(f"✅ تم تشغيل الجلسة: {filename}")
+# ======= إدارة المستخدمين =======
+def load_users():
+    try:
+        with open(USERS_FILE, "r") as f:
+            return json.load(f)
+    except:
+        return {}
 
-@bot.on(events.NewMessage(pattern="/start"))
-async def start(event):
-    buttons = [
-        [Button.inline("➕ إضافة جلسة جديدة", b"add_session")],
-        [Button.inline("📤 إرسال رسالة", b"send_message")],
-        [Button.inline("📤 إرسال بالتتابع كل 5 ثواني", b"send_message_slow")],
-        [Button.inline("📋 عرض الجلسات", b"list_sessions")],
-        [Button.inline("🗑️ مسح جميع الجلسات", b"clear_sessions")]
-    ]
-    await event.respond("👋 أهلاً! اختر أمر:", buttons=buttons)
-    await asyncio.sleep(30)
-    await event.delete()
+def save_users(users):
+    with open(USERS_FILE, "w") as f:
+        json.dump(users, f, indent=4)
 
-@bot.on(events.CallbackQuery)
-async def callback_handler(event):
-    data = event.data.decode("utf-8")
+# ======= إضافة مستخدم =======
+def add_user(user_id):
+    users = load_users()
+    if str(user_id) not in users:
+        users[str(user_id)] = {"downloads": 0}
+        save_users(users)
 
-    if data == "add_session":
-        await event.edit("📥 أرسل لي StringSession الخاص بالحساب:")
-        @bot.on(events.NewMessage(from_users=event.sender_id))
-        async def get_session(ev):
-            session_str = ev.raw_text.strip()
-            try:
-                client = TelegramClient(StringSession(session_str), API_ID, API_HASH)
-                await client.start()
-                # حفظ الجلسة في ملف باسم user_id.session
-                filename = f"sessions/{ev.sender_id}.session"
-                with open(filename, "w", encoding="utf-8") as f:
-                    f.write(session_str)
-                user_clients[client] = True
-                await ev.reply("✅ تم إضافة وتشغيل الجلسة.")
-            except Exception as e:
-                await ev.reply(f"❌ خطأ: {e}")
-            bot.remove_event_handler(get_session)
-            await asyncio.sleep(3)
-            await ev.delete()
-        await event.delete()
+# ======= تحديث عدد التنزيلات =======
+def increment_download(user_id):
+    users = load_users()
+    if str(user_id) in users:
+        users[str(user_id)]["downloads"] += 1
+        save_users(users)
 
-    elif data == "send_message":
-        await event.edit("✉️ أرسل نص الرسالة أو صورة/فيديو/ملصق للبوت.\n"
-                         "سأسألك إذا تريد الإرسال مؤقت أو عادي.")
-        @bot.on(events.NewMessage(from_users=event.sender_id))
-        async def get_message(ev):
-            sender = ev.sender_id
-            media_path = None
-            text = ev.text or ""
-            if ev.photo:
-                media_path = await ev.download_media(file=f"media/{ev.id}.jpg")
-            elif ev.video:
-                media_path = await ev.download_media(file=f"media/{ev.id}.mp4")
-            elif ev.sticker:
-                media_path = await ev.download_media(file=f"media/{ev.id}.webp")
-
-            await ev.reply("هل تريد الإرسال:\n🔘 مؤقت (تحذف بعد 3 ثواني)\n🔘 عادي", buttons=[
-                Button.inline("مؤقت", b"temp_send"),
-                Button.inline("عادي", b"perm_send")
-            ])
-
-            async def send_handler(ev2):
-                temporary = ev2.data == b"temp_send"
-                await send_all(ev.sender_id, text, media_path, temporary)
-                await ev2.edit("✅ تم الإرسال.")
-                bot.remove_event_handler(send_handler)
-                await asyncio.sleep(3)
-
-            bot.on(events.CallbackQuery)(send_handler)
-
-            bot.remove_event_handler(get_message)
-            await asyncio.sleep(3)
-            await ev.delete()
-        await event.delete()
-
-    elif data == "send_message_slow":
-        await event.edit("✉️ أرسل نص الرسالة أو وسائط للإرسال بالتتابع (كل 5 ثواني).")
-        # هنا تقدر تضيف تنفيذ الإرسال بالتتابع كل 5 ثواني بنفس منطق send_message
-        await asyncio.sleep(3)
-        await event.delete()
-
-    elif data == "list_sessions":
-        msg = "📋 الجلسات الحالية:\n"
-        for client in user_clients.keys():
-            me = await client.get_me()
-            msg += f"- {me.first_name} (@{me.username or 'لا يوجد'})\n"
-        await event.edit(msg)
-        await asyncio.sleep(10)
-        await event.delete()
-
-    elif data == "clear_sessions":
-        user_clients.clear()
-        for file in os.listdir("sessions"):
-            if file.endswith(".session"):
-                os.remove(f"sessions/{file}")
-        await event.edit("✅ تم مسح جميع الجلسات.")
-        await asyncio.sleep(3)
-        await event.delete()
-
-async def send_all(user_id, text, media_path=None, temporary=False):
-    count = 0
-    for client in list(user_clients.keys()):
+# ======= التحقق من الاشتراك =======
+async def is_subscribed(user_id):
+    channels = load_channels()
+    for channel in channels:
         try:
-            me = await client.get_me()
-            if media_path:
-                msg = await client.send_file(user_id, media_path)
-            else:
-                msg = await client.send_message(user_id, text)
-            count += 1
-            if temporary:
-                await asyncio.sleep(3)
-                await msg.delete()
-        except Exception as e:
-            print(f"خطأ في حساب {me.id}: {e}")
+            member = await bot.get_chat_member(channel, user_id)
+            if member.status in ["left", "kicked"]:
+                return False
+        except:
+            return False
+    return True if channels else True  # إذا ماكو قنوات تعتبر مشترك
 
-async def main():
-    print("✅ تشغيل البوت...")
-    await load_sessions()
-    await bot.run_until_disconnected()
+# ======= إنشاء لوحة أزرار الاشتراك =======
+def subscription_keyboard():
+    channels = load_channels()
+    buttons = []
+    for ch in channels:
+        buttons.append([InlineKeyboardButton(text=ch, url=f"https://t.me/{ch.lstrip('@')}")])
+    buttons.append([InlineKeyboardButton(text="✅ تحقق", callback_data="check_sub")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
+# ======= دوال تنزيل الفيديو =======
+
+async def download_tiktok(url, quality="hd"):
+    # لو الفيديو محجوز بالكاش يرجع مباشر
+    if url in CACHE:
+        return CACHE[url]
+
+    async with aiohttp.ClientSession() as session:
+        api_url = f"https://api.tikmate.app/api/convert?url={url}"
+        async with session.get(api_url) as resp:
+            data = await resp.json()
+            token = data.get('token')
+            vid_id = data.get('id')
+            if not token or not vid_id:
+                raise Exception("فشل الحصول على رابط الفيديو")
+            video_url = f"https://tikmate.app/download/{token}/{vid_id}.mp4"
+            CACHE[url] = video_url
+            return video_url
+
+async def download_facebook(url):
+    if url in CACHE:
+        return CACHE[url]
+
+    async with aiohttp.ClientSession() as session:
+        api_url = "https://fbdownloader.online/api/analyze"
+        payload = {"q": url}
+        headers = {"content-type": "application/x-www-form-urlencoded"}
+        async with session.post(api_url, data=payload, headers=headers) as resp:
+            data = await resp.json()
+            if 'links' not in data or not data['links']:
+                raise Exception("فشل الحصول على رابط الفيديو")
+            video_url = data['links'][0]['url']
+            CACHE[url] = video_url
+            return video_url
+
+async def download_instagram(url):
+    # مثال مبسط: ممكن تستخدم API أو scraping خارجي لاحقًا
+    raise NotImplementedError("Instagram download not implemented yet")
+
+async def download_youtube(url):
+    raise NotImplementedError("YouTube download not implemented yet")
+
+async def download_twitter(url):
+    raise NotImplementedError("Twitter download not implemented yet")
+
+# ======= كشف نوع الرابط =======
+def detect_platform(url: str):
+    url = url.lower()
+    if any(x in url for x in ["tiktok.com", "vm.tiktok.com"]):
+        return "tiktok"
+    elif any(x in url for x in ["facebook.com", "fb.watch"]):
+        return "facebook"
+    elif "instagram.com" in url:
+        return "instagram"
+    elif any(x in url for x in ["youtube.com", "youtu.be"]):
+        return "youtube"
+    elif any(x in url for x in ["twitter.com", "x.com"]):
+        return "twitter"
+    else:
+        return None
+
+# ======= التعامل مع الرسائل =======
+
+@dp.message_handler(commands=["start"])
+async def cmd_start(message: types.Message):
+    add_user(message.from_user.id)
+    if await is_subscribed(message.from_user.id):
+        await message.reply("أهلًا! أرسل لي رابط فيديو لتنزيله.")
+    else:
+        await message.reply("🚫 يجب الاشتراك في القنوات التالية أولاً:", reply_markup=subscription_keyboard())
+
+@dp.callback_query_handler(lambda c: c.data == "check_sub")
+async def callback_check_sub(call: types.CallbackQuery):
+    if await is_subscribed(call.from_user.id):
+        await call.message.edit_text("✅ أنت مشترك في كل القنوات، الآن يمكنك استخدام البوت.")
+    else:
+        await call.answer("❌ ما زلت غير مشترك في جميع القنوات.", show_alert=True)
+
+@dp.message_handler(lambda m: re.match(r'https?://', m.text or ""))
+async def handle_link(message: types.Message):
+    add_user(message.from_user.id)
+    if not await is_subscribed(message.from_user.id):
+        await message.reply("🚫 يجب الاشتراك في القنوات التالية أولاً:", reply_markup=subscription_keyboard())
+        return
+
+    url = message.text.strip()
+    platform = detect_platform(url)
+
+    if not platform:
+        await message.reply("❌ المنصة غير مدعومة حالياً.")
+        return
+
+    await message.reply("🚀 جاري التنزيل ...")
+
+    try:
+        if platform == "tiktok":
+            video_url = await download_tiktok(url)
+            await message.reply_video(video_url)
+        elif platform == "facebook":
+            video_url = await download_facebook(url)
+            await message.reply_video(video_url)
+        elif platform == "instagram":
+            await message.reply("⚠️ تحميل إنستغرام غير مفعل حاليًا.")
+        elif platform == "youtube":
+            await message.reply("⚠️ تحميل يوتيوب غير مفعل حاليًا.")
+        elif platform == "twitter":
+            await message.reply("⚠️ تحميل تويتر غير مفعل حاليًا.")
+    except Exception as e:
+        await message.reply(f"❌ فشل التنزيل: {str(e)}")
+
+# ======= لوحة تحكم المالك =======
+
+def owner_keyboard():
+    buttons = [
+        [InlineKeyboardButton("📌 القنوات", callback_data="show_channels")],
+        [InlineKeyboardButton("➕ إضافة قناة", callback_data="add_channel")],
+        [InlineKeyboardButton("❌ حذف قناة", callback_data="remove_channel")],
+        [InlineKeyboardButton("📊 عدد المستخدمين", callback_data="user_count")],
+        [InlineKeyboardButton("📢 نشر رسالة", callback_data="broadcast")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+@dp.message_handler(commands=["admin"])
+async def cmd_admin(message: types.Message):
+    if message.from_user.id != OWNER_ID:
+        await message.reply("🚫 أنت لست مالك البوت.")
+        return
+    await message.reply("مرحبًا بك في لوحة التحكم:", reply_markup=owner_keyboard())
+
+@dp.callback_query_handler(lambda c: c.data == "show_channels")
+async def show_channels(call: types.CallbackQuery):
+    if call.from_user.id != OWNER_ID:
+        await call.answer("🚫 ممنوع", show_alert=True)
+        return
+    channels = load_channels()
+    text = "📌 القنوات المطلوبة للاشتراك:\n\n"
+    if not channels:
+        text += "لا توجد قنوات بعد."
+    else:
+        for ch in channels:
+            text += f"{ch}\n"
+    await call.message.edit_text(text, reply_markup=owner_keyboard())
+
+@dp.callback_query_handler(lambda c: c.data == "add_channel")
+async def add_channel_start(call: types.CallbackQuery):
+    if call.from_user.id != OWNER_ID:
+        await call.answer("🚫 ممنوع", show_alert=True)
+        return
+    await call.message.edit_text("📥 أرسل معرف القناة التي تريد إضافتها (مثلاً: @channelusername)")
+
+    @dp.message_handler()
+    async def receive_channel(message: types.Message):
+        if message.from_user.id != OWNER_ID:
+            return
+        ch = message.text.strip()
+        channels = load_channels()
+        if ch not in channels:
+            channels.append(ch)
+            save_channels(channels)
+            await message.reply(f"✅ تم إضافة القناة: {ch}")
+        else:
+            await message.reply("⚠️ القناة موجودة بالفعل.")
+        # إزالة المعالج المؤقت
+        dp.message_handlers.unregister(receive_channel)
+
+@dp.callback_query_handler(lambda c: c.data == "remove_channel")
+async def remove_channel_start(call: types.CallbackQuery):
+    if call.from_user.id != OWNER_ID:
+        await call.answer("🚫 ممنوع", show_alert=True)
+        return
+    channels = load_channels()
+    if not channels:
+        await call.message.edit_text("لا توجد قنوات للحذف.", reply_markup=owner_keyboard())
+        return
+
+    buttons = []
+    for ch in channels:
+        buttons.append([InlineKeyboardButton(ch, callback_data=f"del_{ch}")])
+    buttons.append([InlineKeyboardButton("رجوع", callback_data="admin_back")])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await call.message.edit_text("❌ اختر قناة للحذف:", reply_markup=keyboard)
+
+@dp.callback_query_handler(lambda c: c.data and c.data.startswith("del_"))
+async def delete_channel(call: types.CallbackQuery):
+    if call.from_user.id != OWNER_ID:
+        await call.answer("🚫 ممنوع", show_alert=True)
+        return
+    ch = call.data[4:]
+    channels = load_channels()
+    if ch in channels:
+        channels.remove(ch)
+        save_channels(channels)
+        await call.message.edit_text(f"✅ تم حذف القناة: {ch}", reply_markup=owner_keyboard())
+    else:
+        await call.answer("⚠️ القناة غير موجودة.", show_alert=True)
+
+@dp.callback_query_handler(lambda c: c.data == "admin_back")
+async def admin_back(call: types.CallbackQuery):
+    if call.from_user.id != OWNER_ID:
+        await call.answer("🚫 ممنوع", show_alert=True)
+        return
+    await call.message.edit_text("مرحبًا بك في لوحة التحكم:", reply_markup=owner_keyboard())
+
+@dp.callback_query_handler(lambda c: c.data == "user_count")
+async def user_count(call: types.CallbackQuery):
+    if call.from_user.id != OWNER_ID:
+        await call.answer("🚫 ممنوع", show_alert=True)
+        return
+    users = load_users()
+    await call.message.edit_text(f"👥 عدد المستخدمين المسجلين: {len(users)}", reply_markup=owner_keyboard())
+
+@dp.callback_query_handler(lambda c: c.data == "broadcast")
+async def broadcast_start(call: types.CallbackQuery):
+    if call.from_user.id != OWNER_ID:
+        await call.answer("🚫 ممنوع", show_alert=True)
+        return
+    await call.message.edit_text("📢 أرسل الرسالة التي تريد نشرها:")
+
+    @dp.message_handler()
+    async def receive_broadcast(message: types.Message):
+        if message.from_user.id != OWNER_ID:
+            return
+        users = load_users()
+        count = 0
+        for user_id in users:
+            try:
+                await bot.send_message(int(user_id), message.text)
+                count += 1
+            except:
+                pass
+        await message.reply(f"✅ تم إرسال الرسالة لـ {count} مستخدمًا.")
+        dp.message_handlers.unregister(receive_broadcast)
+
+# ========== تشغيل البوت ==========
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(main())
+    print("🚀 Bot is running...")
+    executor.start_polling(dp)
