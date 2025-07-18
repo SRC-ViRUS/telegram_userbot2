@@ -1,4 +1,3 @@
-import os
 import json
 import re
 import aiohttp
@@ -6,12 +5,12 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils import executor
 
-BOT_TOKEN = os.getenv("7768107017:AAErNtQKYEvJVWN35osSlGNgW4xBq6NxSKs")
+# ✅ توكن البوت (مباشرة)
+BOT_TOKEN = "7768107017:AAErNtQKYEvJVWN35osSlGNgW4xBq6NxSKs"
 OWNER_ID = 7477836004  # معرف مالك البوت
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot)
-
 CHANNELS_FILE = "channels.json"
 USERS_FILE = "users.json"
 CACHE = {}  # لتخزين مؤقت للفيديوهات والصور
