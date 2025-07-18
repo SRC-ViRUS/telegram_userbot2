@@ -1,21 +1,18 @@
 import json
 import re
 import aiohttp
-import os
 from aiogram import Bot, Dispatcher, types
-from aiogram.contrib.fsm_storage.memory import MemoryStorage
-from aiogram.dispatcher import FSMContext
-from aiogram.dispatcher.filters.state import State, StatesGroup
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils import executor
 
-# ✅ توكن البوت (من متغيرات البيئة)
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-OWNER_ID = int(os.environ.get("OWNER_ID"))  # معرف مالك البوت
+# ✅ توكن البوت (مباشرة)
+BOT_TOKEN = "7768107017:AAErNtQKYEvJVWN35osSlGNgW4xBq6NxSKs"
+OWNER_ID = 7477836004  # معرف مالك البوت
 
-if not BOT_TOKEN:
-    raise ValueError("No BOT_TOKEN found in environment variables")
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher(bot)
 
+# باقي كود البوت يكمل هنا...
 storage = MemoryStorage()
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot, storage=storage)
