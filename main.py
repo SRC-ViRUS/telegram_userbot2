@@ -2,11 +2,14 @@ import json
 import re
 import aiohttp
 from aiogram import Bot, Dispatcher, types
+from aiogram.contrib.fsm_storage.memory import MemoryStorage
+from aiogram.dispatcher import FSMContext
+from aiogram.dispatcher.filters.state import State, StatesGroup
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils import executor
 
 # ✅ توكن البوت (مباشرة)
-BOT_TOKEN = "7768107017:AAErNtQKYEvJVWN35osSlGNgW4xBq6NxSKs"
+BOT_TOKEN = "7768107017:AAH-yUfGuXJ_Ir3WidjwPPc1K3PLl4sgO9I"
 OWNER_ID = 7477836004  # معرف مالك البوت
 
 bot = Bot(token=BOT_TOKEN)
@@ -14,7 +17,6 @@ dp = Dispatcher(bot)
 
 # باقي كود البوت يكمل هنا...
 storage = MemoryStorage()
-bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot, storage=storage)
 CHANNELS_FILE = "channels.json"
 USERS_FILE = "users.json"
@@ -92,16 +94,29 @@ async def download_tiktok(url, quality="hd"):
         return CACHE[url]
 
     async with aiohttp.ClientSession() as session:
-        api_url = f"https://api.tikmate.app/api/convert?url={url}"
-        async with session.get(api_url) as resp:
-            data = await resp.json()
-            token = data.get('token')
-            vid_id = data.get('id')
-            if not token or not vid_id:
-                raise Exception("فشل الحصول على رابط الفيديو")
-            video_url = f"https://tikmate.app/download/{token}/{vid_id}.mp4"
-            CACHE[url] = video_url
-            return video_url
+        try:
+            api_url = f"https://api.tikmate.app/api/convert?url={url}"
+            async with session.get(api_url) as resp:
+                data = await resp.json(content_type=None)
+                token = data.get('token')
+                vid_id = data.get('id')
+                if not token or not vid_id:
+                    raise Exception("فشل الحصول على رابط الفيديو")
+                video_url = f"https://tikmate.app/download/{token}/{vid_id}.mp4"
+                CACHE[url] = video_url
+                return video_url
+        except Exception as e:
+            # Fallback to lovetik.com
+            api_url = "https://lovetik.com/api/ajax/search"
+            payload = {"query": url}
+            headers = {"content-type": "application/x-www-form-urlencoded"}
+            async with session.post(api_url, data=payload, headers=headers) as resp:
+                data = await resp.json()
+                if 'links' not in data or not data['links']:
+                    raise Exception("فشل الحصول على رابط الفيديو")
+                video_url = data['links'][0]['a']
+                CACHE[url] = video_url
+                return video_url
 
 async def download_facebook(url):
     if url in CACHE:
@@ -124,26 +139,39 @@ async def download_instagram(url):
         return CACHE[url]
 
     async with aiohttp.ClientSession() as session:
-        api_url = f"https://api.instagram.com/oembed?url={url}"
-        async with session.get(api_url) as resp:
-            if resp.status != 200:
-                raise Exception("فشل الحصول على معلومات الفيديو من Instagram")
-            data = await resp.json()
-            video_url = data.get('thumbnail_url')
-            if not video_url:
-                raise Exception("فشل الحصول على رابط الفيديو")
-
-            # The oembed endpoint returns a thumbnail, let's try to get the video from a different source
-            api_url = f"https://api.threadsphotodownloader.com/v2/media?url={url}"
+        try:
+            api_url = f"https://api.instagram.com/oembed?url={url}"
             async with session.get(api_url) as resp:
                 if resp.status != 200:
-                    raise Exception("فشل الحصول على الفيديو")
+                    raise Exception("فشل الحصول على معلومات الفيديو من Instagram")
                 data = await resp.json()
-                video_url = data['data']['videos'][0]['url']
+                video_url = data.get('thumbnail_url')
+                if not video_url:
+                    raise Exception("فشل الحصول على رابط الفيديو")
+
+                # The oembed endpoint returns a thumbnail, let's try to get the video from a different source
+                api_url = f"https://api.threadsphotodownloader.com/v2/media?url={url}"
+                async with session.get(api_url) as resp:
+                    if resp.status != 200:
+                        raise Exception("فشل الحصول على الفيديو")
+                    data = await resp.json()
+                    video_url = data['data']['videos'][0]['url']
 
 
-            CACHE[url] = video_url
-            return video_url
+                CACHE[url] = video_url
+                return video_url
+        except Exception as e:
+            # Fallback to a different API
+            api_url = f"https://ig-downloader.com/api/ajax/search"
+            payload = {"q": url, "t": "media"}
+            headers = {"content-type": "application/x-www-form-urlencoded"}
+            async with session.post(api_url, data=payload, headers=headers) as resp:
+                data = await resp.json()
+                if 'data' not in data or not data['data']:
+                    raise Exception("فشل الحصول على رابط الفيديو")
+                video_url = data['data']
+                CACHE[url] = video_url
+                return video_url
 
 async def download_youtube(url):
     if url in CACHE:
@@ -357,5 +385,7 @@ async def process_broadcast(message: types.Message, state: FSMContext):
 
 # ========== تشغيل البوت ==========
 if __name__ == "__main__":
+    import logging
+    logging.basicConfig(level=logging.INFO, filename="bot.log", format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     print("🚀 Bot is running...")
     executor.start_polling(dp)
